@@ -1,6 +1,6 @@
-use log::{info, error};
-use env_logger::{Builder, Env};
 use clap::Parser;
+use env_logger::{Builder, Env};
+use log::{error, info};
 use serde_json::Value;
 
 #[derive(Parser)]
@@ -8,7 +8,7 @@ use serde_json::Value;
 struct Args {
     /// The name of the package to install
     #[arg(value_parser = sanitize_name)]
-    name: String
+    name: String,
 }
 
 fn sanitize_name(s: &str) -> Result<String, String> {
@@ -25,7 +25,7 @@ fn sanitize_name(s: &str) -> Result<String, String> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Builder::from_env(Env::default().default_filter_or("info")).init();
 
-    let args =  Args::parse();
+    let args = Args::parse();
 
     info!("Installing {}", args.name);
 
@@ -35,12 +35,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Checking GitHub's latest releases at {}", url);
 
     let response = client
-            .get(&url)
-            .header("User-Agent", "bini")
-            .send()
-            .await?
-            .json::<Value>()
-            .await?;
+        .get(&url)
+        .header("User-Agent", "bini")
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
 
     let Some(tag) = response["tag_name"].as_str() else {
         error!("No release found");
