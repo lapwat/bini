@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use dirs::data_dir;
+use dirs::{data_dir, state_dir};
 use env_logger::{Builder, Env};
 use log::{error, info, warn};
 use serde_json::Value;
@@ -25,7 +25,7 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Lists all installed binaries
+    /// List installed binaries
     List,
 }
 
@@ -240,6 +240,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::copy(&executable, &installation_path)?;
     info!("Installed executable into {}", installation_path.display());
 
+    if let Some(state_dir) = state_dir() {
+        let index_path = state_dir.join("bini/index.txt");
+        match record_installation(&index_path, binary_name, &package) {
+            Ok(()) => info!(
+                "Recorded {},{} in {}",
+                binary_name,
+                package,
+                index_path.display()
+            ),
+            Err(e) => warn!(
+                "Failed to record installation in {}: {}",
+                index_path.display(),
+                e
+            ),
+        }
+    } else {
+        warn!("Could not determine state dir; skipping install index");
+    }
+
     info!("Removed temporary folder {}", tmp_dir.path().display());
 
     Ok(())
@@ -268,4 +287,26 @@ fn list_binaries(installation_directory: &Path) -> Result<(), Box<dyn std::error
     }
 
     Ok(())
+}
+
+/// Appends `binary_name,package` to the index file, replacing any existing
+/// line for the same binary so the index keeps one entry per installed binary.
+fn record_installation(index_path: &Path, binary_name: &str, package: &str) -> std::io::Result<()> {
+    let mut lines: Vec<String> = Vec::new();
+
+    if index_path.exists() {
+        lines = fs::read_to_string(index_path)?
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with(&format!("{},", binary_name)))
+            .map(str::to_string)
+            .collect();
+    }
+
+    lines.push(format!("{},{}", binary_name, package));
+
+    if let Some(parent) = index_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    fs::write(index_path, lines.join("\n") + "\n")
 }
