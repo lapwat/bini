@@ -9,6 +9,7 @@ use std::io::copy;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use walkdir::WalkDir;
 
@@ -101,6 +102,26 @@ fn make_executable(path: &Path) -> std::io::Result<()> {
     fs::set_permissions(path, perms)
 }
 
+/// Formats an `OffsetDateTime` as YYYY-MM-DD.
+fn format_date(datetime: OffsetDateTime) -> String {
+    let date = datetime.date();
+    format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        u8::from(date.month()),
+        date.day()
+    )
+}
+
+/// Parses an RFC 3339 timestamp (like GitHub's asset `updated_at`) and formats
+/// it as YYYY-MM-DD. Falls back to the raw string if it can't be parsed.
+fn format_asset_date(date: &str) -> String {
+    match OffsetDateTime::parse(date, &Rfc3339) {
+        Ok(datetime) => format_date(datetime),
+        Err(_) => date.to_string(),
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     Builder::from_env(Env::default().default_filter_or("info")).init();
 
@@ -161,11 +182,53 @@ fn install(
         return Err("No release found".into());
     };
 
-    info!("Found release with tag {}", tag);
+    let date = response["created_at"].as_str().map(String::from).unwrap();
 
-    let mut latest_name = None;
-    let mut latest_url = None;
-    let mut latest_date = None;
+    info!(
+        "Found release with tag {} ({})",
+        tag,
+        format_asset_date(&date)
+    );
+
+    let binary_name = match as_name {
+        Some(alias) => alias,
+        None => package.split('/').last().unwrap(),
+    };
+    let binary_path = installation_directory.join(binary_name);
+
+    if binary_path.exists() {
+        let metadata = std::fs::metadata(&binary_path)?;
+        let local_datetime = OffsetDateTime::from(metadata.modified()?);
+
+        info!(
+            "Local binary found at {} ({})",
+            binary_path.display(),
+            format_date(local_datetime)
+        );
+
+        if let Ok(release_datetime) = OffsetDateTime::parse(&date, &Rfc3339) {
+            if local_datetime >= release_datetime {
+                info!("Binary is up to date. Nothing to do.",);
+                return Ok(());
+            }
+
+            info!(
+                "Local binary is older ({}) than latest asset ({}). Replacing.",
+                format_date(local_datetime),
+                format_date(release_datetime)
+            );
+        } else {
+            warn!(
+                "Could not parse asset date {}; assuming it is newer and replacing",
+                date
+            );
+        }
+    } else {
+        info!("Local binary not found. Installing.")
+    }
+
+    let mut compatible_name = None;
+    let mut compatible_url = None;
 
     if let Some(assets) = response["assets"].as_array() {
         for asset in assets {
@@ -199,52 +262,18 @@ fn install(
                 continue;
             }
 
-            latest_name = asset["name"].as_str().map(String::from);
-            latest_url = asset["browser_download_url"].as_str().map(String::from);
-            latest_date = asset["updated_at"].as_str().map(String::from);
+            compatible_name = asset["name"].as_str().map(String::from);
+            compatible_url = asset["browser_download_url"].as_str().map(String::from);
             break;
         }
     }
 
-    let (Some(name), Some(url), Some(date)) = (latest_name, latest_url, latest_date) else {
+    let (Some(name), Some(url)) = (compatible_name, compatible_url) else {
         error!("No linux x86 asset found in release");
         return Err("No linux x86 asset found in release".into());
     };
 
-    info!("Found linux x86 asset {} ({})", name, date);
-
-    let binary_name = match as_name {
-        Some(alias) => alias,
-        None => package.split('/').last().unwrap(),
-    };
-    let binary_path = installation_directory.join(binary_name);
-
-    if binary_path.exists() {
-        let metadata = std::fs::metadata(&binary_path)?;
-        let modified = metadata.modified()?;
-        let local_datetime = OffsetDateTime::from(modified);
-
-        let format = format_description!("[year]-[month]-[day]");
-        let local_date = local_datetime.format(format).unwrap();
-
-        info!(
-            "Local binary found at {} ({})",
-            binary_path.display(),
-            local_date
-        );
-
-        if date <= local_date {
-            info!("Binary is up to date. Nothing to do.",);
-            return Ok(());
-        } else {
-            info!(
-                "Local binary is older ({}) than latest asset. Replacing.",
-                local_date
-            )
-        }
-    } else {
-        info!("Local binary not found. Installing.")
-    }
+    info!("Found linux x86 asset {}", name);
 
     let tmp_dir = tempfile::Builder::new().prefix("bini-").tempdir()?;
     let tmp_download_path = tmp_dir.path().join(&name);
