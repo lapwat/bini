@@ -1,7 +1,16 @@
 use clap::Parser;
+use dirs::data_dir;
 use env_logger::{Builder, Env};
-use log::{error, info};
+use log::{error, info, warn};
 use serde_json::Value;
+use std::env;
+use std::fs::{self, File};
+use std::io::copy;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use time::OffsetDateTime;
+use time::macros::format_description;
+use walkdir::WalkDir;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -21,26 +30,73 @@ fn sanitize_name(s: &str) -> Result<String, String> {
     Ok(result)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn is_in_path(dest_folder: &Path) -> bool {
+    let path_var = match env::var_os("PATH") {
+        Some(var) => var,
+        None => return false,
+    };
+
+    let target = dest_folder
+        .canonicalize()
+        .unwrap_or_else(|_| dest_folder.to_path_buf());
+
+    env::split_paths(&path_var).any(|p| p.canonicalize().unwrap_or(p) == target)
+}
+
+fn find_executable(tmp_dir: &Path) -> Option<PathBuf> {
+    for entry in WalkDir::new(tmp_dir).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let is_exe = path
+            .metadata()
+            .map(|m| m.is_file() && (m.permissions().mode() & 0o111 != 0))
+            .unwrap_or(false);
+
+        if is_exe {
+            return Some(path.to_path_buf());
+        }
+    }
+    None
+}
+
+fn make_executable(path: &Path) -> std::io::Result<()> {
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(perms.mode() | 0o111);
+    fs::set_permissions(path, perms)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     Builder::from_env(Env::default().default_filter_or("info")).init();
+
+    let installation_directory = data_dir().ok_or("No data dir")?.join("bini/bin");
+    if !installation_directory.exists() {
+        std::fs::create_dir_all(&installation_directory)?;
+        info!(
+            "Created installation directory {}",
+            installation_directory.display()
+        );
+    }
+
+    if !is_in_path(&installation_directory) {
+        warn!(
+            "Consider adding {} to your PATH",
+            installation_directory.display()
+        )
+    }
 
     let args = Args::parse();
 
     info!("Installing {}", args.name);
 
     let url = format!("https://api.github.com/repos/{}/releases/latest", args.name);
-    let client = reqwest::Client::new();
+    let client = reqwest::blocking::Client::new();
 
     info!("Checking GitHub's latest releases at {}", url);
 
     let response = client
         .get(&url)
         .header("User-Agent", "bini")
-        .send()
-        .await?
-        .json::<Value>()
-        .await?;
+        .send()?
+        .json::<Value>()?;
 
     let Some(tag) = response["tag_name"].as_str() else {
         error!("No release found");
@@ -98,12 +154,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (Some(name), Some(url), Some(date)) = (latest_name, latest_url, latest_date) else {
         error!("No linux x86 asset found in release");
-        return Err("No compatible linux x86 asset found in release".into());
+        return Err("No linux x86 asset found in release".into());
     };
 
-    info!("Found compatible asset: {} ({})", name, date);
+    info!("Found compatible asset: {} ({})", url, date);
 
-    info!("Latest URL found: {}", url);
+    let binary_name = args.name.split('/').last().unwrap();
+    let binary_path = installation_directory.join(binary_name);
+
+    if binary_path.exists() {
+        let metadata = std::fs::metadata(&binary_path)?;
+        let modified = metadata.modified()?;
+        let local_datetime = OffsetDateTime::from(modified);
+
+        let format = format_description!("[year]-[month]-[day]");
+        let local_date = local_datetime.format(format).unwrap();
+
+        info!(
+            "Local binary found at {} ({})",
+            binary_path.display(),
+            local_date
+        );
+
+        if date <= local_date {
+            info!("Binary is up to date. Nothing to do.",);
+            return Ok(());
+        } else {
+            info!(
+                "Local binary is older ({}) than latest asset. Replacing.",
+                local_date
+            )
+        }
+    } else {
+        info!("Local binary not found. Installing.")
+    }
+
+    let tmp_dir = tempfile::Builder::new().prefix("bini-").tempdir()?;
+    let tmp_download_path = tmp_dir.path().join(&name);
+    info!("Created temporary folder {}", tmp_dir.path().display());
+
+    info!("Downloading asset into {}", tmp_download_path.display());
+    let mut response = reqwest::blocking::get(url)?;
+    let mut out_file = File::create(&tmp_download_path)?;
+    copy(&mut response, &mut out_file)?;
+
+    if name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".gz") {
+        info!("Extracting gzip archive...");
+        let tar_gz = File::open(tmp_download_path)?;
+        let tar = flate2::read::GzDecoder::new(tar_gz);
+        let mut archive = tar::Archive::new(tar);
+        archive.unpack(&tmp_dir)?;
+    } else if name.ends_with(".zip") {
+        info!("Extracting zip archive...");
+        let file = File::open(tmp_download_path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+        archive.extract(&tmp_dir)?;
+    } else {
+        info!("Assuming this is an executable");
+        make_executable(&tmp_download_path)?;
+    }
+
+    let executable = find_executable(&tmp_dir.path())
+        .ok_or("No executable file found in the downloaded asset.")?;
+    info!(
+        "Found executable: {}",
+        executable.file_name().unwrap().to_string_lossy()
+    );
+
+    let installation_path = installation_directory.join(binary_name);
+    fs::copy(&executable, &installation_path)?;
+    info!("Installed executable into {}", installation_path.display());
+
+    info!("Removed temporary folder {}", tmp_dir.path().display());
 
     Ok(())
 }
