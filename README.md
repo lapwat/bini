@@ -1,6 +1,6 @@
 # bini
 
-Bini is a package manager, focused on installing binaries on your system.
+Bini is a package manager that installs binaries on your system.
 
 # Usage
 
@@ -10,6 +10,7 @@ Usage: bini [OPTIONS] [NAME] [COMMAND]
 Commands:
   install  Install from GitHub repository
   list     List installed binaries
+  update   Update installed binaries
   help     Print this message or the help of the given subcommand(s)
 
 Arguments:
@@ -23,6 +24,8 @@ Options:
 Examples:
   bini install sharkdp/bat
   bini install burntsushi/ripgrep --as rg
+  bini i sharkdp/bat
+  bini sharkdp/bat
 ```
 
 # Update strategy
@@ -53,7 +56,7 @@ source ~/.zshrc
 
 - [x] install command
 - [x] list command
-- [ ] update command
+- [x] update command
 - [ ] remove command
 - [ ] install from GitLab
 - [ ] install from Codeberg

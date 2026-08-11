@@ -16,8 +16,7 @@ use walkdir::WalkDir;
 #[command(
     version,
     about,
-    arg_required_else_help = true,
-    after_help = "Examples:\n  bini install sharkdp/bat\n  bini install burntsushi/ripgrep --as rg"
+    after_help = "Examples:\n  bini install sharkdp/bat\n  bini install burntsushi/ripgrep --as rg\n  bini i sharkdp/bat\n  bini sharkdp/bat"
 )]
 struct Args {
     /// The name of the package to install
@@ -37,7 +36,7 @@ enum Command {
     /// Install from GitHub repository
     #[command(
         alias = "i",
-        after_help = "Examples:\n  bini install sharkdp/bat\n  bini install burntsushi/ripgrep --as rg"
+        after_help = "Examples:\n  bini install sharkdp/bat\n  bini install burntsushi/ripgrep --as rg\n  bini i sharkdp/bat\n  bini sharkdp/bat"
     )]
     Install {
         /// The name of the package to install
@@ -50,8 +49,12 @@ enum Command {
     },
 
     /// List installed binaries
-    #[command(alias = "l")]
+    #[command(alias = "l", after_help = "Examples:\n  bini list\n  bini l")]
     List,
+
+    /// Update installed binaries
+    #[command(alias = "u", after_help = "Examples:\n  bini update\n  bini u\n  bini")]
+    Update,
 }
 
 fn sanitize_name(s: &str) -> Result<String, String> {
@@ -122,9 +125,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (package, as_name) = match args.command {
         Some(Command::List) => return list_binaries(&installation_directory),
         Some(Command::Install { name, as_name }) => (name, as_name),
-        None => (args.name.expect("a package name is required"), args.as_name),
+        Some(Command::Update) => return update_binaries(&installation_directory),
+        None => {
+            if let Some(name) = args.name {
+                (name, args.as_name)
+            } else {
+                return update_binaries(&installation_directory);
+            }
+        }
     };
 
+    install(&package, as_name.as_deref(), &installation_directory)
+}
+
+fn install(
+    package: &str,
+    as_name: Option<&str>,
+    installation_directory: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     info!("Installing {}", package);
 
     let url = format!("https://api.github.com/repos/{}/releases/latest", package);
@@ -145,8 +163,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Found release with tag {}", tag);
 
-    info!("Checking release for linux x86 assets");
-
     let mut latest_name = None;
     let mut latest_url = None;
     let mut latest_date = None;
@@ -157,8 +173,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(n) => n,
                 None => continue,
             };
-
-            info!("Checking asset: {}", name);
 
             let name_lower = name.to_lowercase();
 
@@ -197,10 +211,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("No linux x86 asset found in release".into());
     };
 
-    info!("Found compatible asset: {} ({})", url, date);
+    info!("Found linux x86 asset {} ({})", name, date);
 
-    let binary_name = match &as_name {
-        Some(alias) => alias.as_str(),
+    let binary_name = match as_name {
+        Some(alias) => alias,
         None => package.split('/').last().unwrap(),
     };
     let binary_path = installation_directory.join(binary_name);
@@ -270,7 +284,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(state_dir) = state_dir() {
         let index_path = state_dir.join("bini/index.txt");
-        match record_installation(&index_path, binary_name, &package) {
+        match record_installation(&index_path, binary_name, package) {
             Ok(()) => info!(
                 "Recorded {},{} in {}",
                 binary_name,
@@ -337,4 +351,38 @@ fn record_installation(index_path: &Path, binary_name: &str, package: &str) -> s
     }
 
     fs::write(index_path, lines.join("\n") + "\n")
+}
+
+/// Updates every binary listed in the install index by re-installing it from
+/// its recorded source, keeping each binary's recorded name (`--as` included).
+fn update_binaries(installation_directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let index_path = state_dir().ok_or("No state dir")?.join("bini/index.txt");
+
+    if !index_path.exists() {
+        info!(
+            "No install index found at {}; nothing to update",
+            index_path.display()
+        );
+        return Ok(());
+    }
+
+    let contents = fs::read_to_string(&index_path)?;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let Some((binary_name, package)) = line.split_once(',') else {
+            warn!("Skipping malformed index line: {line}");
+            continue;
+        };
+
+        info!("Updating {} from {}", binary_name, package);
+        if let Err(e) = install(package, Some(binary_name), installation_directory) {
+            warn!("Failed to update {} ({}): {}", binary_name, package, e);
+        }
+    }
+
+    Ok(())
 }
