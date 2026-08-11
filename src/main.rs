@@ -19,6 +19,10 @@ struct Args {
     #[arg(value_parser = sanitize_name)]
     name: Option<String>,
 
+    /// Install the binary under a different name
+    #[arg(long = "as", requires = "name")]
+    as_name: Option<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -174,7 +178,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Found compatible asset: {} ({})", url, date);
 
-    let binary_name = package.split('/').last().unwrap();
+    let binary_name = match &args.as_name {
+        Some(alias) => alias.as_str(),
+        None => package.split('/').last().unwrap(),
+    };
     let binary_path = installation_directory.join(binary_name);
 
     if binary_path.exists() {
