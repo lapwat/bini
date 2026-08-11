@@ -36,7 +36,7 @@ struct Args {
 enum Command {
     /// Install from GitHub repository
     #[command(
-        visible_aliases = ["i"],
+        visible_aliases = ["i", ""],
         after_help = "Examples:\n  bini install sharkdp/bat\n  bini install burntsushi/ripgrep --as rg\n  bini i sharkdp/bat\n  bini sharkdp/bat"
     )]
     Install {

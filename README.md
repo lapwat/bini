@@ -1,8 +1,8 @@
-# bini
+# Bini
 
-Bini is a package manager that installs binaries from GitHub releases on your system.
+Bini is a binary manager. Its goal is to install and update binaries from GitHub releases.
 
-Checksums are not checked. Trust your sources !
+Checksums are not checked. Check your sources !
 
 # Usage
 
@@ -33,7 +33,7 @@ Examples:
 
 # Update strategy
 
-Update are handled by checking the date of a release against the modification date of your local binary.
+A local binary is considered out-of-date if its modification date is older than the date of the latest GitHub release.
 
 # Storage
 
@@ -64,3 +64,7 @@ source ~/.zshrc
 - [ ] install from GitLab
 - [ ] install from Codeberg
 - [ ] take host os and architecture into account
+
+# Related works
+
+[https://github.com/houseabsolute/ubi](https://github.com/houseabsolute/ubi)
