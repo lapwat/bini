@@ -13,7 +13,12 @@ use time::macros::format_description;
 use walkdir::WalkDir;
 
 #[derive(Parser)]
-#[command(version, about, arg_required_else_help = true)]
+#[command(
+    version,
+    about,
+    arg_required_else_help = true,
+    after_help = "Examples:\n  bini install sharkdp/bat\n  bini install burntsushi/ripgrep --as rg"
+)]
 struct Args {
     /// The name of the package to install
     #[arg(value_parser = sanitize_name)]
@@ -29,7 +34,23 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Install from GitHub repository
+    #[command(
+        alias = "i",
+        after_help = "Examples:\n  bini install sharkdp/bat\n  bini install burntsushi/ripgrep --as rg"
+    )]
+    Install {
+        /// The name of the package to install
+        #[arg(value_parser = sanitize_name)]
+        name: String,
+
+        /// Install the binary under a different name
+        #[arg(long = "as")]
+        as_name: Option<String>,
+    },
+
     /// List installed binaries
+    #[command(alias = "l")]
     List,
 }
 
@@ -98,11 +119,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-    if let Some(Command::List) = args.command {
-        return list_binaries(&installation_directory);
-    }
-
-    let package = args.name.expect("a package name is required");
+    let (package, as_name) = match args.command {
+        Some(Command::List) => return list_binaries(&installation_directory),
+        Some(Command::Install { name, as_name }) => (name, as_name),
+        None => (args.name.expect("a package name is required"), args.as_name),
+    };
 
     info!("Installing {}", package);
 
@@ -178,7 +199,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Found compatible asset: {} ({})", url, date);
 
-    let binary_name = match &args.as_name {
+    let binary_name = match &as_name {
         Some(alias) => alias.as_str(),
         None => package.split('/').last().unwrap(),
     };
