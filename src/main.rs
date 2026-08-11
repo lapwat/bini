@@ -36,7 +36,7 @@ struct Args {
 enum Command {
     /// Install from GitHub repository
     #[command(
-        alias = "i",
+        visible_aliases = ["i"],
         after_help = "Examples:\n  bini install sharkdp/bat\n  bini install burntsushi/ripgrep --as rg\n  bini i sharkdp/bat\n  bini sharkdp/bat"
     )]
     Install {
@@ -50,12 +50,22 @@ enum Command {
     },
 
     /// List installed binaries
-    #[command(alias = "l", after_help = "Examples:\n  bini list\n  bini l")]
+    #[command(visible_aliases = ["l"])]
     List,
 
-    /// Update installed binaries
-    #[command(alias = "u", after_help = "Examples:\n  bini update\n  bini u\n  bini")]
+    /// Update all installed binaries
+    #[command(visible_aliases = ["u", ""], after_help = "Examples:\n  bini update\n  bini")]
     Update,
+
+    /// Remove installed binary
+    #[command(
+        visible_aliases = ["r", "rm", "uninstall"],
+        after_help = "Examples:\n  bini remove rg"
+    )]
+    Remove {
+        /// The name of the binary to remove
+        name: String,
+    },
 }
 
 fn sanitize_name(s: &str) -> Result<String, String> {
@@ -147,6 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::List) => return list_binaries(&installation_directory),
         Some(Command::Install { name, as_name }) => (name, as_name),
         Some(Command::Update) => return update_binaries(&installation_directory),
+        Some(Command::Remove { name }) => return remove_binary(&name, &installation_directory),
         None => {
             if let Some(name) = args.name {
                 (name, args.as_name)
@@ -414,4 +425,55 @@ fn update_binaries(installation_directory: &Path) -> Result<(), Box<dyn std::err
     }
 
     Ok(())
+}
+
+/// Removes an installed binary and its entry in the install index.
+fn remove_binary(
+    binary_name: &str,
+    installation_directory: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let binary_path = installation_directory.join(binary_name);
+
+    match fs::remove_file(&binary_path) {
+        Ok(()) => info!("Removed {}", binary_path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => warn!(
+            "Binary {} not found in {}",
+            binary_name,
+            installation_directory.display()
+        ),
+        Err(e) => return Err(e.into()),
+    }
+
+    if let Some(state_dir) = state_dir() {
+        let index_path = state_dir.join("bini/index.txt");
+        match remove_from_index(&index_path, binary_name) {
+            Ok(true) => info!("Removed {} from the install index", binary_name),
+            Ok(false) => {}
+            Err(e) => warn!("Failed to update index {}: {}", index_path.display(), e),
+        }
+    } else {
+        warn!("Could not determine state dir; skipping index update");
+    }
+
+    Ok(())
+}
+
+/// Removes the index line for `binary_name`. Returns true if a line was removed.
+fn remove_from_index(index_path: &Path, binary_name: &str) -> std::io::Result<bool> {
+    if !index_path.exists() {
+        return Ok(false);
+    }
+
+    let contents = fs::read_to_string(index_path)?;
+    let remaining: Vec<&str> = contents
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with(&format!("{},", binary_name)))
+        .collect();
+
+    if remaining.len() == contents.lines().count() {
+        return Ok(false);
+    }
+
+    fs::write(index_path, remaining.join("\n") + "\n")?;
+    Ok(true)
 }

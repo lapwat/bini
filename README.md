@@ -1,6 +1,8 @@
 # bini
 
-Bini is a package manager that installs binaries on your system.
+Bini is a package manager that installs binaries from GitHub releases on your system.
+
+Checksums are not checked. Trust your sources !
 
 # Usage
 
@@ -8,9 +10,10 @@ Bini is a package manager that installs binaries on your system.
 Usage: bini [OPTIONS] [NAME] [COMMAND]
 
 Commands:
-  install  Install from GitHub repository
-  list     List installed binaries
-  update   Update installed binaries
+  install  Install from GitHub repository [alias: i]
+  list     List installed binaries [alias: l]
+  update   Update all installed binaries [aliases: u, ]
+  remove   Remove installed binary [aliases: r, rm, uninstall]
   help     Print this message or the help of the given subcommand(s)
 
 Arguments:
@@ -34,7 +37,7 @@ Update are handled by checking the date of a release against the modification da
 
 # Storage
 
-The index of installed binaries is stored in `~/.local/state/bini/index.txt`. It keeps track of what you have installed, and with which name.
+The index of installed binaries is stored in `~/.local/state/bini/index.txt`. It keeps track of what you have installed, and under what name.
 
 Binaries are stored in `~/.local/share/bini/bin/` folder. You may add this folder to your $PATH.
 
@@ -57,6 +60,7 @@ source ~/.zshrc
 - [x] install command
 - [x] list command
 - [x] update command
-- [ ] remove command
+- [x] remove command
 - [ ] install from GitLab
 - [ ] install from Codeberg
+- [ ] take host os and architecture into account
