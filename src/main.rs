@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use dirs::data_dir;
 use env_logger::{Builder, Env};
 use log::{error, info, warn};
@@ -13,11 +13,20 @@ use time::macros::format_description;
 use walkdir::WalkDir;
 
 #[derive(Parser)]
-#[command(version, about)]
+#[command(version, about, arg_required_else_help = true)]
 struct Args {
     /// The name of the package to install
     #[arg(value_parser = sanitize_name)]
-    name: String,
+    name: Option<String>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Lists all installed binaries
+    List,
 }
 
 fn sanitize_name(s: &str) -> Result<String, String> {
@@ -85,9 +94,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-    info!("Installing {}", args.name);
+    if let Some(Command::List) = args.command {
+        return list_binaries(&installation_directory);
+    }
 
-    let url = format!("https://api.github.com/repos/{}/releases/latest", args.name);
+    let package = args.name.expect("a package name is required");
+
+    info!("Installing {}", package);
+
+    let url = format!("https://api.github.com/repos/{}/releases/latest", package);
     let client = reqwest::blocking::Client::new();
 
     info!("Checking GitHub's latest releases at {}", url);
@@ -159,7 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Found compatible asset: {} ({})", url, date);
 
-    let binary_name = args.name.split('/').last().unwrap();
+    let binary_name = package.split('/').last().unwrap();
     let binary_path = installation_directory.join(binary_name);
 
     if binary_path.exists() {
@@ -226,6 +241,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Installed executable into {}", installation_path.display());
 
     info!("Removed temporary folder {}", tmp_dir.path().display());
+
+    Ok(())
+}
+
+fn list_binaries(installation_directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let format = format_description!("[year]-[month]-[day]");
+    let mut binaries: Vec<(String, String)> = Vec::new();
+
+    for entry in fs::read_dir(installation_directory)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let modified = entry.metadata()?.modified()?;
+        let date = OffsetDateTime::from(modified).format(format)?;
+        binaries.push((name, date));
+    }
+
+    binaries.sort();
+
+    for (name, date) in binaries {
+        println!("{} ({})", name, date);
+    }
 
     Ok(())
 }
