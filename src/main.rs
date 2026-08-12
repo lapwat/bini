@@ -4,6 +4,7 @@ use env_logger::{Builder, Env};
 use log::{error, info, warn};
 use serde_json::Value;
 use std::env;
+use std::env::consts::{ARCH, OS};
 use std::fs::{self, File};
 use std::io::copy;
 use std::os::unix::fs::PermissionsExt;
@@ -112,6 +113,42 @@ fn make_executable(path: &Path) -> std::io::Result<()> {
     fs::set_permissions(path, perms)
 }
 
+/// Returns true if a lowercased asset name matches the given OS, covering the
+/// names commonly used for it in release assets.
+fn os_matches(name: &str, os: &str) -> bool {
+    match os {
+        "linux" => name.contains("linux"),
+        "macos" => name.contains("darwin") || name.contains("macos") || name.contains("osx"),
+        "windows" => name.contains("windows") || name.contains("win"),
+        _ => name.contains(os),
+    }
+}
+
+/// Returns true if a lowercased asset name matches the given architecture,
+/// covering the names commonly used for it in release assets. Shorter aliases
+/// like "x86" or "arm" are only accepted when the longer variants (which they
+/// are substrings of) are absent.
+fn arch_matches(name: &str, arch: &str) -> bool {
+    match arch {
+        "x86_64" => name.contains("x86_64") || name.contains("amd64") || name.contains("x64"),
+        "aarch64" => name.contains("aarch64") || name.contains("arm64"),
+        "x86" => {
+            !name.contains("x86_64")
+                && !name.contains("amd64")
+                && (name.contains("x86")
+                    || name.contains("i386")
+                    || name.contains("i686")
+                    || name.contains("386"))
+        }
+        "arm" => {
+            !name.contains("aarch64")
+                && !name.contains("arm64")
+                && (name.contains("armv7") || name.contains("armhf") || name.contains("arm"))
+        }
+        _ => name.contains(arch),
+    }
+}
+
 /// Formats an `OffsetDateTime` as YYYY-MM-DD.
 fn format_date(datetime: OffsetDateTime) -> String {
     let date = datetime.date();
@@ -133,7 +170,9 @@ fn format_asset_date(date: &str) -> String {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    Builder::from_env(Env::default().default_filter_or("info")).init();
+    Builder::from_env(Env::default().default_filter_or("info"))
+        .format_timestamp(None)
+        .init();
 
     let installation_directory = data_dir().ok_or("No data dir")?.join("bini/bin");
     if !installation_directory.exists() {
@@ -175,12 +214,17 @@ fn install(
     as_name: Option<&str>,
     installation_directory: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Installing {}", package);
+    let binary_name = match as_name {
+        Some(alias) => alias,
+        None => package.split('/').last().unwrap(),
+    };
+    let binary_path = installation_directory.join(binary_name);
+
+    info!("Installing {} as {}", package, binary_name);
 
     let url = format!("https://api.github.com/repos/{}/releases/latest", package);
     let client = reqwest::blocking::Client::new();
-
-    info!("Checking GitHub's latest releases at {}", url);
+    info!("Checking GitHub's latest release at {}", url);
 
     let response = client
         .get(&url)
@@ -200,12 +244,6 @@ fn install(
         tag,
         format_asset_date(&date)
     );
-
-    let binary_name = match as_name {
-        Some(alias) => alias,
-        None => package.split('/').last().unwrap(),
-    };
-    let binary_path = installation_directory.join(binary_name);
 
     if binary_path.exists() {
         let metadata = std::fs::metadata(&binary_path)?;
@@ -250,16 +288,13 @@ fn install(
 
             let name_lower = name.to_lowercase();
 
-            // Test 1: Must contain 'linux'
-            if !name_lower.contains("linux") {
+            // Test 1: Must match the current OS
+            if !os_matches(&name_lower, OS) {
                 continue;
             }
 
-            // Test 2: Must contain 'amd64', 'x86_64', or 'x64'
-            if !name_lower.contains("amd64")
-                && !name_lower.contains("x86_64")
-                && !name_lower.contains("x64")
-            {
+            // Test 2: Must match the current architecture
+            if !arch_matches(&name_lower, ARCH) {
                 continue;
             }
 
@@ -280,11 +315,11 @@ fn install(
     }
 
     let (Some(name), Some(url)) = (compatible_name, compatible_url) else {
-        error!("No linux x86 asset found in release");
-        return Err("No linux x86 asset found in release".into());
+        error!("No {OS}/{ARCH} asset found in release");
+        return Err(format!("No {OS}/{ARCH} asset found in release").into());
     };
 
-    info!("Found linux x86 asset {}", name);
+    info!("Found {OS}/{ARCH} asset {}", name);
 
     let tmp_dir = tempfile::Builder::new().prefix("bini-").tempdir()?;
     let tmp_download_path = tmp_dir.path().join(&name);
@@ -325,12 +360,7 @@ fn install(
     if let Some(state_dir) = state_dir() {
         let index_path = state_dir.join("bini/index.txt");
         match record_installation(&index_path, binary_name, package) {
-            Ok(()) => info!(
-                "Recorded {},{} in {}",
-                binary_name,
-                package,
-                index_path.display()
-            ),
+            Ok(()) => info!("Recorded {} in the install index", binary_name),
             Err(e) => warn!(
                 "Failed to record installation in {}: {}",
                 index_path.display(),

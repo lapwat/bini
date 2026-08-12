@@ -1,6 +1,12 @@
 # Bini
 
-Bini is a binary manager. Its goal is to install and update binaries from GitHub releases.
+Bini is a binary package manager.
+
+**Features**
+
+- Install binaries from GitHub releases in a dedicated `bin` folder
+- Match your OS and architecture
+- Update binaries based on release date
 
 Checksums are not checked. Check your sources !
 
@@ -61,9 +67,9 @@ source ~/.zshrc
 - [x] list command
 - [x] update command
 - [x] remove command
+- [x] match host os and architecture
 - [ ] install from GitLab
 - [ ] install from Codeberg
-- [ ] take host os and architecture into account
 
 # Related works
 
