@@ -36,7 +36,7 @@ struct Args {
 enum Command {
     /// Install from GitHub repository
     #[command(
-        visible_aliases = ["i", ""],
+        visible_aliases = ["i"],
         after_help = "Examples:\n  bini install sharkdp/bat\n  bini install burntsushi/ripgrep --as rg\n  bini i sharkdp/bat\n  bini sharkdp/bat"
     )]
     Install {
@@ -54,12 +54,12 @@ enum Command {
     List,
 
     /// Update all installed binaries
-    #[command(visible_aliases = ["u", ""], after_help = "Examples:\n  bini update\n  bini")]
+    #[command(visible_aliases = ["u"], after_help = "Examples:\n  bini update\n  bini")]
     Update,
 
     /// Remove installed binary
     #[command(
-        visible_aliases = ["r", "rm", "uninstall"],
+        visible_aliases = ["r", "rm", "delete", "uninstall"],
         after_help = "Examples:\n  bini remove rg"
     )]
     Remove {
