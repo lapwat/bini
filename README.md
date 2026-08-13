@@ -2,13 +2,16 @@
 
 Bini is a binary package manager.
 
+**Why?**
+
+- Benefit from packages new features & bug fixes as soon as they are out
+- Download/extract/install everytime you want to try a new package is tedious
+
 **Features**
 
 - Install binaries from GitHub releases in a dedicated `bin` folder
 - Match your OS and architecture
 - Update binaries based on release date
-
-Checksums are not checked. Check your sources !
 
 # Usage
 
@@ -38,9 +41,20 @@ Examples:
   bini sharkdp/bat
 ```
 
-# Update strategy
+# Installation
 
-A local binary is considered out-of-date if its modification date is older than the date of the latest GitHub release.
+**From source**
+
+```sh
+cargo install --frozen --git https://github.com/lapwat/bini
+```
+
+**Manage bini binary with bini**
+
+```sh
+bini install lapwat/bini
+cargo uninstall bini
+```
 
 # Storage
 
@@ -61,6 +75,10 @@ source ~/.bashrc
 echo 'export PATH="$HOME/.local/share/bini/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
+
+# Update strategy
+
+A local binary is considered out-of-date if its modification date is older than the date of the latest GitHub release.
 
 # Related works
 

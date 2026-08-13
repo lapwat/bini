@@ -379,7 +379,17 @@ fn install(
     );
 
     let installation_path = installation_directory.join(binary_name);
-    if package == "lapwat/bini" {
+    let canonical_install_dir = installation_directory
+        .canonicalize()
+        .unwrap_or_else(|_| installation_directory.to_path_buf());
+    let in_install_dir = env::current_exe()
+        .ok()
+        .and_then(|p| p.canonicalize().ok())
+        .and_then(|p| p.parent().map(|parent| parent == &canonical_install_dir))
+        .unwrap_or(false);
+
+    if package == "lapwat/bini" && in_install_dir {
+        // handle self-update
         self_replace(&executable)?;
         remove_file(&executable)?;
     } else {
