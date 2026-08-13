@@ -206,8 +206,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // setup index path
-    let state_dir = dirs::state_dir().unwrap_or(data_dir);
-    let index_path = state_dir.join("bini/index.txt");
+    let state_dir = dirs::state_dir().unwrap_or(data_dir).join("bini");
+    if !state_dir.exists() {
+        std::fs::create_dir_all(&state_dir)?;
+        info!("Created state directory {}", state_dir.display());
+    }
+    let index_path = state_dir.join("index.txt");
 
     let args = Args::parse();
 
@@ -423,7 +427,6 @@ fn install(
     }
     info!(target: &log_target, "Installed executable into {}", installation_path.display());
 
-    let index_path = index_path.join("index.txt");
     match record_installation(&index_path, binary_name, package) {
         Ok(()) => info!(target: &log_target, "Recorded {} in the install index", binary_name),
         Err(e) => warn!(
@@ -493,14 +496,6 @@ fn update_binaries(
     index_path: &Path,
     force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if !index_path.exists() {
-        info!(
-            "No install index found at {}; nothing to update",
-            index_path.display()
-        );
-        return Ok(());
-    }
-
     let contents = fs::read_to_string(&index_path)?;
     for line in contents.lines() {
         let line = line.trim();
