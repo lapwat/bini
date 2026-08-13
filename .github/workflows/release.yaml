@@ -35,7 +35,7 @@ jobs:
             - name: Pack archive (Linux / macOS)
               run: |
                   tar -czvf ${{ github.event.repository.name }}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release ${{ github.event.repository.name }}
-                  sha256sum ${{ github.event.repository.name }}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > ${{ github.event.repository.name }}-${{ matrix.target }}.tar.gz.sha256
+                  sha256sum ${{ github.event.repository.name }}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz > ${{ github.event.repository.name }}-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
 
             - name: Upload to Release
               uses: softprops/action-gh-release@v3.0.2

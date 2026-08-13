@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use dirs::{data_dir, state_dir};
+use dirs;
 use env_logger::{Builder, Env};
 use log::{error, info, warn};
 use self_replace::self_replace;
@@ -183,11 +183,14 @@ fn format_asset_date(date: &str) -> String {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // configure logs
     Builder::from_env(Env::default().default_filter_or("info"))
         .format_timestamp(None)
         .init();
 
-    let installation_directory = data_dir().ok_or("No data dir")?.join("bini/bin");
+    // setup installation directory
+    let data_dir = dirs::data_dir().ok_or("Failed to evaluate data directory")?;
+    let installation_directory = data_dir.join("bini/bin");
     if !installation_directory.exists() {
         std::fs::create_dir_all(&installation_directory)?;
         info!(
@@ -195,13 +198,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             installation_directory.display()
         );
     }
-
     if !is_in_path(&installation_directory) {
         warn!(
             "Consider adding {} to your PATH",
             installation_directory.display()
         )
     }
+
+    // setup index path
+    let state_dir = dirs::state_dir().unwrap_or(data_dir);
+    let index_path = state_dir.join("bini/index.txt");
 
     let args = Args::parse();
 
@@ -211,19 +217,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             name,
             as_name,
             force,
-        }) => return install(&name, as_name.as_deref(), &installation_directory, force),
-        Some(Command::Update { force }) => return update_binaries(&installation_directory, force),
-        Some(Command::Remove { name }) => return remove_binary(&name, &installation_directory),
+        }) => {
+            return install(
+                &name,
+                as_name.as_deref(),
+                &installation_directory,
+                &index_path,
+                force,
+            );
+        }
+        Some(Command::Update { force }) => {
+            return update_binaries(&installation_directory, &index_path, force);
+        }
+        Some(Command::Remove { name }) => {
+            return remove_binary(&name, &installation_directory, &index_path);
+        }
         _ => {
             if let Some(name) = args.name {
                 return install(
                     &name,
                     args.as_name.as_deref(),
                     &installation_directory,
+                    &index_path,
                     args.force,
                 );
             } else {
-                return update_binaries(&installation_directory, args.force);
+                return update_binaries(&installation_directory, &index_path, args.force);
             }
         }
     };
@@ -233,6 +252,7 @@ fn install(
     package: &str,
     as_name: Option<&str>,
     installation_directory: &Path,
+    index_path: &Path,
     force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let binary_name = match as_name {
@@ -403,19 +423,15 @@ fn install(
     }
     info!(target: &log_target, "Installed executable into {}", installation_path.display());
 
-    if let Some(state_dir) = state_dir() {
-        let index_path = state_dir.join("bini/index.txt");
-        match record_installation(&index_path, binary_name, package) {
-            Ok(()) => info!(target: &log_target, "Recorded {} in the install index", binary_name),
-            Err(e) => warn!(
-                target: &log_target,
-                "Failed to record installation in {}: {}",
-                index_path.display(),
-                e
-            ),
-        }
-    } else {
-        warn!(target: &log_target, "Could not determine state dir; skipping install index");
+    let index_path = index_path.join("index.txt");
+    match record_installation(&index_path, binary_name, package) {
+        Ok(()) => info!(target: &log_target, "Recorded {} in the install index", binary_name),
+        Err(e) => warn!(
+            target: &log_target,
+            "Failed to record installation in {}: {}",
+            index_path.display(),
+            e
+        ),
     }
 
     info!(target: &log_target, "Removed temporary folder {}", tmp_dir.path().display());
@@ -474,14 +490,9 @@ fn record_installation(index_path: &Path, binary_name: &str, package: &str) -> s
 /// its recorded source, keeping each binary's recorded name (`--as` included).
 fn update_binaries(
     installation_directory: &Path,
+    index_path: &Path,
     force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let index_dir = match state_dir() {
-        Some(d) => d,
-        _ => dirs::data_dir().ok_or("No data dir")?,
-    };
-    let index_path = index_dir.join("bini/index.txt");
-
     if !index_path.exists() {
         info!(
             "No install index found at {}; nothing to update",
@@ -502,7 +513,13 @@ fn update_binaries(
             continue;
         };
 
-        if let Err(e) = install(package, Some(binary_name), installation_directory, force) {
+        if let Err(e) = install(
+            package,
+            Some(binary_name),
+            installation_directory,
+            index_path,
+            force,
+        ) {
             warn!("Failed to update {} ({}): {}", binary_name, package, e);
         }
     }
@@ -514,6 +531,7 @@ fn update_binaries(
 fn remove_binary(
     binary_name: &str,
     installation_directory: &Path,
+    index_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let binary_path = installation_directory.join(binary_name);
 
@@ -527,15 +545,10 @@ fn remove_binary(
         Err(e) => return Err(e.into()),
     }
 
-    if let Some(state_dir) = state_dir() {
-        let index_path = state_dir.join("bini/index.txt");
-        match remove_from_index(&index_path, binary_name) {
-            Ok(true) => info!("Removed {} from the install index", binary_name),
-            Ok(false) => {}
-            Err(e) => warn!("Failed to update index {}: {}", index_path.display(), e),
-        }
-    } else {
-        warn!("Could not determine state dir; skipping index update");
+    match remove_from_index(&index_path, binary_name) {
+        Ok(true) => info!("Removed {} from the install index", binary_name),
+        Ok(false) => {}
+        Err(e) => warn!("Failed to update index {}: {}", index_path.display(), e),
     }
 
     Ok(())
