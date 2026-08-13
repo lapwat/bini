@@ -4,8 +4,9 @@ Bini is a binary package manager.
 
 **Why?**
 
-- Benefit from packages new features & bug fixes as soon as they are out
-- Download/extract/install everytime you want to try a new package is tedious
+- Install a binary not provided by your package manager
+- Automate download/extract/install workflow
+- Benefit from new features & bug fixes as soon as they are released
 
 **Features**
 
@@ -21,8 +22,8 @@ Usage: bini [OPTIONS] [NAME] [COMMAND]
 Commands:
   install  Install from GitHub repository [alias: i]
   list     List installed binaries [alias: l]
-  update   Update all installed binaries [aliases: u, ]
-  remove   Remove installed binary [aliases: r, rm, uninstall]
+  update   Update all installed binaries [alias: u]
+  remove   Remove installed binary [aliases: r, rm, uninstall, delete]
   help     Print this message or the help of the given subcommand(s)
 
 Arguments:
@@ -58,21 +59,36 @@ cargo uninstall bini
 
 # Storage
 
-The index of installed binaries is stored in `~/.local/state/bini/index.txt`. It keeps track of what you have installed, and under what name.
+The install index is stored in:
+- `~/.local/state/bini/index.txt` on Linux
+- `~/Library/Application Support/bini/index.txt` on macOS
 
-Binaries are stored in `~/.local/share/bini/bin/` folder. You may add this folder to your $PATH.
+It keeps track of what binaries you have installed, and under what name.
+
+Binaries are stored in:
+- `~/.local/share/bini/bin/` on Linux
+- `~/Library/Application Support/bini/bin/` on macOS
+
+You may add this folder to your $PATH.
 
 **For bash**
 
 ```sh
-echo 'export PATH="$HOME/.local/share/bini/bin:$PATH"' >> ~/.bashrc
+echo 'export PATH="$PATH:$HOME/.local/share/bini/bin"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
 **For zsh**
 
 ```sh
-echo 'export PATH="$HOME/.local/share/bini/bin:$PATH"' >> ~/.zshrc
+echo 'export PATH="$PATH:$HOME/.local/share/bini/bin"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**For mac**
+
+```sh
+echo 'export PATH="$PATH:$HOME/Library/Application Support/bini/bin"' >> ~/.zshrc
 source ~/.zshrc
 ```
 

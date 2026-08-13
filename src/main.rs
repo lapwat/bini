@@ -73,7 +73,7 @@ enum Command {
 
     /// Remove installed binary
     #[command(
-        visible_aliases = ["r", "rm", "delete", "uninstall"],
+        visible_aliases = ["r", "rm", "uninstall", "delete"],
         after_help = "Examples:\n  bini remove rg"
     )]
     Remove {
@@ -95,7 +95,7 @@ fn sanitize_name(s: &str) -> Result<String, String> {
 fn is_in_path(dest_folder: &Path) -> bool {
     let path_var = match env::var_os("PATH") {
         Some(var) => var,
-        None => return false,
+        _ => return false,
     };
 
     let target = dest_folder
@@ -214,7 +214,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }) => return install(&name, as_name.as_deref(), &installation_directory, force),
         Some(Command::Update { force }) => return update_binaries(&installation_directory, force),
         Some(Command::Remove { name }) => return remove_binary(&name, &installation_directory),
-        None => {
+        _ => {
             if let Some(name) = args.name {
                 return install(
                     &name,
@@ -237,7 +237,7 @@ fn install(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let binary_name = match as_name {
         Some(alias) => alias,
-        None => package.split('/').last().unwrap(),
+        _ => package.split('/').last().unwrap(),
     };
     let binary_path = installation_directory.join(binary_name);
     let log_target = format!("bini {package}");
@@ -288,7 +288,7 @@ fn install(
                     return Ok(());
                 }
             } else {
-                info!(
+                warn!(
                     target: &log_target,
                     "Local binary is older ({}) than latest asset ({}). Replacing.",
                     format_date(local_datetime),
@@ -313,7 +313,7 @@ fn install(
         for asset in assets {
             let name = match asset["name"].as_str() {
                 Some(n) => n,
-                None => continue,
+                _ => continue,
             };
 
             let name_lower = name.to_lowercase();
@@ -476,7 +476,11 @@ fn update_binaries(
     installation_directory: &Path,
     force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let index_path = state_dir().ok_or("No state dir")?.join("bini/index.txt");
+    let index_dir = match state_dir() {
+        Some(d) => d,
+        _ => dirs::data_dir().ok_or("No data dir")?,
+    };
+    let index_path = index_dir.join("bini/index.txt");
 
     if !index_path.exists() {
         info!(
