@@ -240,12 +240,13 @@ fn install(
         None => package.split('/').last().unwrap(),
     };
     let binary_path = installation_directory.join(binary_name);
+    let log_target = format!("bini {package}");
 
-    info!("Installing {} as {}", package, binary_name);
+    info!(target: &log_target, "Installing {} as {}", package, binary_name);
 
     let url = format!("https://api.github.com/repos/{}/releases/latest", package);
     let client = reqwest::blocking::Client::new();
-    info!("Checking GitHub's latest release at {}", url);
+    info!(target: &log_target, "Checking GitHub's latest release at {}", url);
 
     let response = client
         .get(&url)
@@ -254,13 +255,14 @@ fn install(
         .json::<Value>()?;
 
     let Some(tag) = response["tag_name"].as_str() else {
-        error!("No release found");
+        error!(target: &log_target, "No release found");
         return Err("No release found".into());
     };
 
     let date = response["created_at"].as_str().map(String::from).unwrap();
 
     info!(
+        target: &log_target,
         "Found release with tag {} ({})",
         tag,
         format_asset_date(&date)
@@ -271,6 +273,7 @@ fn install(
         let local_datetime = OffsetDateTime::from(metadata.modified()?);
 
         info!(
+            target: &log_target,
             "Local binary found at {} ({})",
             binary_path.display(),
             format_date(local_datetime)
@@ -279,13 +282,14 @@ fn install(
         if let Ok(release_datetime) = OffsetDateTime::parse(&date, &Rfc3339) {
             if local_datetime >= release_datetime {
                 if force {
-                    info!("Binary is up to date. Replacing anyway.",);
+                    info!(target: &log_target, "Binary is up to date. Replacing anyway.");
                 } else {
-                    info!("Binary is up to date. Nothing to do.",);
+                    info!(target: &log_target, "Binary is up to date. Nothing to do.");
                     return Ok(());
                 }
             } else {
                 info!(
+                    target: &log_target,
                     "Local binary is older ({}) than latest asset ({}). Replacing.",
                     format_date(local_datetime),
                     format_date(release_datetime)
@@ -293,12 +297,13 @@ fn install(
             }
         } else {
             warn!(
+                target: &log_target,
                 "Could not parse asset date {}; assuming it is newer and replacing",
                 date
             );
         }
     } else {
-        info!("Local binary not found. Installing.")
+        info!(target: &log_target, "Local binary not found. Installing.")
     }
 
     let mut compatible_name = None;
@@ -340,40 +345,41 @@ fn install(
     }
 
     let (Some(name), Some(url)) = (compatible_name, compatible_url) else {
-        error!("No {OS}/{ARCH} asset found in release");
+        error!(target: &log_target, "No {OS}/{ARCH} asset found in release");
         return Err(format!("No {OS}/{ARCH} asset found in release").into());
     };
 
-    info!("Found {OS}/{ARCH} asset {}", name);
+    info!(target: &log_target, "Found {OS}/{ARCH} asset {}", name);
 
     let tmp_dir = tempfile::Builder::new().prefix("bini-").tempdir()?;
     let tmp_download_path = tmp_dir.path().join(&name);
-    info!("Created temporary folder {}", tmp_dir.path().display());
+    info!(target: &log_target, "Created temporary folder {}", tmp_dir.path().display());
 
-    info!("Downloading asset into {}", tmp_download_path.display());
+    info!(target: &log_target, "Downloading asset into {}", tmp_download_path.display());
     let mut response = reqwest::blocking::get(url)?;
     let mut out_file = File::create(&tmp_download_path)?;
     copy(&mut response, &mut out_file)?;
 
     if name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".gz") {
-        info!("Extracting gzip archive...");
+        info!(target: &log_target, "Extracting gzip archive...");
         let tar_gz = File::open(tmp_download_path)?;
         let tar = flate2::read::GzDecoder::new(tar_gz);
         let mut archive = tar::Archive::new(tar);
         archive.unpack(&tmp_dir)?;
     } else if name.ends_with(".zip") {
-        info!("Extracting zip archive...");
+        info!(target: &log_target, "Extracting zip archive...");
         let file = File::open(tmp_download_path)?;
         let mut archive = zip::ZipArchive::new(file)?;
         archive.extract(&tmp_dir)?;
     } else {
-        info!("Assuming this is an executable");
+        info!(target: &log_target, "Assuming this is an executable");
         make_executable(&tmp_download_path)?;
     }
 
     let executable = find_executable(&tmp_dir.path())
         .ok_or("No executable file found in the downloaded asset.")?;
     info!(
+        target: &log_target,
         "Found executable: {}",
         executable.file_name().unwrap().to_string_lossy()
     );
@@ -395,23 +401,24 @@ fn install(
     } else {
         fs::copy(&executable, &installation_path)?;
     }
-    info!("Installed executable into {}", installation_path.display());
+    info!(target: &log_target, "Installed executable into {}", installation_path.display());
 
     if let Some(state_dir) = state_dir() {
         let index_path = state_dir.join("bini/index.txt");
         match record_installation(&index_path, binary_name, package) {
-            Ok(()) => info!("Recorded {} in the install index", binary_name),
+            Ok(()) => info!(target: &log_target, "Recorded {} in the install index", binary_name),
             Err(e) => warn!(
+                target: &log_target,
                 "Failed to record installation in {}: {}",
                 index_path.display(),
                 e
             ),
         }
     } else {
-        warn!("Could not determine state dir; skipping install index");
+        warn!(target: &log_target, "Could not determine state dir; skipping install index");
     }
 
-    info!("Removed temporary folder {}", tmp_dir.path().display());
+    info!(target: &log_target, "Removed temporary folder {}", tmp_dir.path().display());
 
     Ok(())
 }
@@ -491,7 +498,6 @@ fn update_binaries(
             continue;
         };
 
-        info!("Updating {} from {}", binary_name, package);
         if let Err(e) = install(package, Some(binary_name), installation_directory, force) {
             warn!("Failed to update {} ({}): {}", binary_name, package, e);
         }
