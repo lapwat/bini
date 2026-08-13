@@ -27,6 +27,7 @@ Arguments:
 
 Options:
       --as <AS_NAME>  Install the binary under a different name
+  -f, --force         Force binary replacement
   -h, --help          Print help
   -V, --version       Print version
 
@@ -60,16 +61,6 @@ source ~/.bashrc
 echo 'export PATH="$HOME/.local/share/bini/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
-
-# Todo
-
-- [x] install command
-- [x] list command
-- [x] update command
-- [x] remove command
-- [x] match host os and architecture
-- [ ] install from GitLab
-- [ ] install from Codeberg
 
 # Related works
 

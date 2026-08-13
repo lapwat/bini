@@ -115,7 +115,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bini"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "dirs",
@@ -123,6 +123,7 @@ dependencies = [
  "flate2",
  "log",
  "reqwest",
+ "self-replace",
  "serde_json",
  "tar",
  "tempfile",
@@ -1569,6 +1570,17 @@ checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "self-replace"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03ec815b5eab420ab893f63393878d89c90fdd94c0bcc44c07abb8ad95552fb7"
+dependencies = [
+ "fastrand",
+ "tempfile",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

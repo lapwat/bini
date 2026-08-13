@@ -2,10 +2,11 @@ use clap::{Parser, Subcommand};
 use dirs::{data_dir, state_dir};
 use env_logger::{Builder, Env};
 use log::{error, info, warn};
+use self_replace::self_replace;
 use serde_json::Value;
 use std::env;
 use std::env::consts::{ARCH, OS};
-use std::fs::{self, File};
+use std::fs::{self, File, remove_file};
 use std::io::copy;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,10 @@ struct Args {
     #[arg(long = "as", requires = "name")]
     as_name: Option<String>,
 
+    /// Force binary replacement
+    #[arg(short, long)]
+    force: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -46,8 +51,12 @@ enum Command {
         name: String,
 
         /// Install the binary under a different name
-        #[arg(long = "as")]
+        #[arg(long = "as", requires = "name")]
         as_name: Option<String>,
+
+        /// Force binary replacement
+        #[arg(short, long, requires = "name")]
+        force: bool,
     },
 
     /// List installed binaries
@@ -56,7 +65,11 @@ enum Command {
 
     /// Update all installed binaries
     #[command(visible_aliases = ["u"], after_help = "Examples:\n  bini update\n  bini")]
-    Update,
+    Update {
+        /// Force binary replacement
+        #[arg(short, long)]
+        force: bool,
+    },
 
     /// Remove installed binary
     #[command(
@@ -192,27 +205,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-    let (package, as_name) = match args.command {
+    let _ = match args.command {
         Some(Command::List) => return list_binaries(&installation_directory),
-        Some(Command::Install { name, as_name }) => (name, as_name),
-        Some(Command::Update) => return update_binaries(&installation_directory),
+        Some(Command::Install {
+            name,
+            as_name,
+            force,
+        }) => return install(&name, as_name.as_deref(), &installation_directory, force),
+        Some(Command::Update { force }) => return update_binaries(&installation_directory, force),
         Some(Command::Remove { name }) => return remove_binary(&name, &installation_directory),
         None => {
             if let Some(name) = args.name {
-                (name, args.as_name)
+                return install(
+                    &name,
+                    args.as_name.as_deref(),
+                    &installation_directory,
+                    args.force,
+                );
             } else {
-                return update_binaries(&installation_directory);
+                return update_binaries(&installation_directory, args.force);
             }
         }
     };
-
-    install(&package, as_name.as_deref(), &installation_directory)
 }
 
 fn install(
     package: &str,
     as_name: Option<&str>,
     installation_directory: &Path,
+    force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let binary_name = match as_name {
         Some(alias) => alias,
@@ -257,15 +278,19 @@ fn install(
 
         if let Ok(release_datetime) = OffsetDateTime::parse(&date, &Rfc3339) {
             if local_datetime >= release_datetime {
-                info!("Binary is up to date. Nothing to do.",);
-                return Ok(());
+                if force {
+                    info!("Binary is up to date. Replacing anyway.",);
+                } else {
+                    info!("Binary is up to date. Nothing to do.",);
+                    return Ok(());
+                }
+            } else {
+                info!(
+                    "Local binary is older ({}) than latest asset ({}). Replacing.",
+                    format_date(local_datetime),
+                    format_date(release_datetime)
+                );
             }
-
-            info!(
-                "Local binary is older ({}) than latest asset ({}). Replacing.",
-                format_date(local_datetime),
-                format_date(release_datetime)
-            );
         } else {
             warn!(
                 "Could not parse asset date {}; assuming it is newer and replacing",
@@ -354,7 +379,12 @@ fn install(
     );
 
     let installation_path = installation_directory.join(binary_name);
-    fs::copy(&executable, &installation_path)?;
+    if package == "lapwat/bini" {
+        self_replace(&executable)?;
+        remove_file(&executable)?;
+    } else {
+        fs::copy(&executable, &installation_path)?;
+    }
     info!("Installed executable into {}", installation_path.display());
 
     if let Some(state_dir) = state_dir() {
@@ -425,7 +455,10 @@ fn record_installation(index_path: &Path, binary_name: &str, package: &str) -> s
 
 /// Updates every binary listed in the install index by re-installing it from
 /// its recorded source, keeping each binary's recorded name (`--as` included).
-fn update_binaries(installation_directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn update_binaries(
+    installation_directory: &Path,
+    force: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let index_path = state_dir().ok_or("No state dir")?.join("bini/index.txt");
 
     if !index_path.exists() {
@@ -449,7 +482,7 @@ fn update_binaries(installation_directory: &Path) -> Result<(), Box<dyn std::err
         };
 
         info!("Updating {} from {}", binary_name, package);
-        if let Err(e) = install(package, Some(binary_name), installation_directory) {
+        if let Err(e) = install(package, Some(binary_name), installation_directory, force) {
             warn!("Failed to update {} ({}): {}", binary_name, package, e);
         }
     }
