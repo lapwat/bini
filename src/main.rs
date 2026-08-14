@@ -2,15 +2,13 @@ use clap::{Parser, Subcommand};
 use dirs;
 use env_logger::{Builder, Env};
 use log::{error, info, warn};
-use self_replace::self_replace;
 use serde_json::Value;
 use std::env;
 use std::env::consts::{ARCH, OS};
-use std::fs::{self, File, remove_file};
+use std::fs;
 use std::io::copy;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use walkdir::WalkDir;
@@ -166,8 +164,8 @@ fn arch_matches(name: &str, arch: &str) -> bool {
     }
 }
 
-/// Formats an `OffsetDateTime` as YYYY-MM-DD.
-fn format_date(datetime: OffsetDateTime) -> String {
+/// Formats an `time::OffsetDateTime` as YYYY-MM-DD.
+fn format_date(datetime: time::OffsetDateTime) -> String {
     let date = datetime.date();
     format!(
         "{:04}-{:02}-{:02}",
@@ -180,7 +178,7 @@ fn format_date(datetime: OffsetDateTime) -> String {
 /// Parses an RFC 3339 timestamp (like GitHub's asset `updated_at`) and formats
 /// it as YYYY-MM-DD. Falls back to the raw string if it can't be parsed.
 fn format_asset_date(date: &str) -> String {
-    match OffsetDateTime::parse(date, &Rfc3339) {
+    match time::OffsetDateTime::parse(date, &Rfc3339) {
         Ok(datetime) => format_date(datetime),
         Err(_) => date.to_string(),
     }
@@ -288,6 +286,7 @@ fn install(
     };
 
     let date = response["created_at"].as_str().map(String::from).unwrap();
+    let release_datetime = time::OffsetDateTime::parse(&date, &Rfc3339)?;
 
     info!(
         target: &log_target,
@@ -298,7 +297,7 @@ fn install(
 
     if binary_path.exists() {
         let metadata = std::fs::metadata(&binary_path)?;
-        let local_datetime = OffsetDateTime::from(metadata.modified()?);
+        let local_datetime = time::OffsetDateTime::from(metadata.modified()?);
 
         info!(
             target: &log_target,
@@ -307,27 +306,19 @@ fn install(
             format_date(local_datetime)
         );
 
-        if let Ok(release_datetime) = OffsetDateTime::parse(&date, &Rfc3339) {
-            if local_datetime >= release_datetime {
-                if force {
-                    warn!(target: &log_target, "Binary is up to date. Replacing anyway.");
-                } else {
-                    info!(target: &log_target, "Binary is up to date. Nothing to do.");
-                    return Ok(());
-                }
+        if local_datetime >= release_datetime {
+            if force {
+                warn!(target: &log_target, "Binary is up to date. Replacing anyway.");
             } else {
-                warn!(
-                    target: &log_target,
-                    "Local binary is older ({}) than latest asset ({}). Replacing.",
-                    format_date(local_datetime),
-                    format_date(release_datetime)
-                );
+                info!(target: &log_target, "Binary is up to date. Nothing to do.");
+                return Ok(());
             }
         } else {
             warn!(
                 target: &log_target,
-                "Could not parse asset date {}; assuming it is newer and replacing",
-                date
+                "Local binary is older ({}) than latest asset ({}). Replacing.",
+                format_date(local_datetime),
+                format_date(release_datetime)
             );
         }
     } else {
@@ -379,24 +370,25 @@ fn install(
 
     info!(target: &log_target, "Found {OS}/{ARCH} asset {}", name);
 
-    let tmp_dir = tempfile::Builder::new().prefix("bini-").tempdir()?;
+    let tmp_dir = tempfile::Builder::new().prefix("bini").tempdir()?;
     let tmp_download_path = tmp_dir.path().join(&name);
     info!(target: &log_target, "Created temporary folder {}", tmp_dir.path().display());
 
     info!(target: &log_target, "Downloading asset into {}", tmp_download_path.display());
     let mut response = reqwest::blocking::get(url)?;
-    let mut out_file = File::create(&tmp_download_path)?;
+    let mut out_file = std::fs::File::create(&tmp_download_path)?;
     copy(&mut response, &mut out_file)?;
+    drop(out_file);
 
     if name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".gz") {
-        info!(target: &log_target, "Extracting gzip archive...");
-        let tar_gz = File::open(tmp_download_path)?;
+        // info!(target: &log_target, "Extracting gzip archive...");
+        let tar_gz = std::fs::File::open(tmp_download_path)?;
         let tar = flate2::read::GzDecoder::new(tar_gz);
         let mut archive = tar::Archive::new(tar);
         archive.unpack(&tmp_dir)?;
     } else if name.ends_with(".zip") {
         info!(target: &log_target, "Extracting zip archive...");
-        let file = File::open(tmp_download_path)?;
+        let file = std::fs::File::open(tmp_download_path)?;
         let mut archive = zip::ZipArchive::new(file)?;
         archive.extract(&tmp_dir)?;
     } else {
@@ -413,22 +405,28 @@ fn install(
     );
 
     let installation_path = installation_directory.join(binary_name);
-    let canonical_install_dir = installation_directory
-        .canonicalize()
-        .unwrap_or_else(|_| installation_directory.to_path_buf());
     let in_install_dir = env::current_exe()
         .ok()
         .and_then(|p| p.canonicalize().ok())
-        .and_then(|p| p.parent().map(|parent| parent == &canonical_install_dir))
+        .and_then(|p| p.parent().map(|p| p == installation_directory))
         .unwrap_or(false);
 
+    // handle self-update and running bini from bin directory
     if package == "lapwat/bini" && in_install_dir {
-        // handle self-update
-        self_replace(&executable)?;
-        remove_file(&executable)?;
+        self_replace::self_replace(&executable)?;
+        std::fs::remove_file(&executable)?;
     } else {
-        fs::copy(&executable, &installation_path)?;
+        std::fs::copy(&executable, &installation_path)?;
     }
+
+    // set modification date to release date
+    let mtime = filetime::FileTime::from_unix_time(
+        release_datetime.unix_timestamp(),
+        release_datetime.nanosecond(),
+    );
+
+    filetime::set_file_mtime(&installation_path, mtime)?;
+
     info!(target: &log_target, "Installed executable into {}", installation_path.display());
 
     match record_installation(&index_path, binary_name, package) {
@@ -492,7 +490,7 @@ fn list_binaries(
 
         let name = entry.file_name().to_string_lossy().into_owned();
         let modified = entry.metadata()?.modified()?;
-        let date = OffsetDateTime::from(modified).format(format)?;
+        let date = time::OffsetDateTime::from(modified).format(format)?;
         binaries.push((name, date, entry.path()));
     }
 
