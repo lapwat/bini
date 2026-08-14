@@ -405,16 +405,13 @@ fn install(
     );
 
     let installation_path = installation_directory.join(binary_name);
-    let in_install_dir = env::current_exe()
-        .ok()
-        .and_then(|p| p.canonicalize().ok())
-        .and_then(|p| p.parent().map(|p| p == installation_directory))
-        .unwrap_or(false);
+    let current_exe = env::current_exe()?.canonicalize()?;
 
-    // handle self-update and running bini from bin directory
-    if package == "lapwat/bini" && in_install_dir {
+    // handle self-update,
+    // TODO: as_name / binary_path cannot be bini (or only if package = lapwat/bini)
+    // otherwise bini will be replaced by another binary
+    if installation_path == current_exe {
         self_replace::self_replace(&executable)?;
-        std::fs::remove_file(&executable)?;
     } else {
         std::fs::copy(&executable, &installation_path)?;
     }
