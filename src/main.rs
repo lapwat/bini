@@ -61,7 +61,11 @@ enum Command {
 
     /// List installed binaries
     #[command(visible_aliases = ["l"])]
-    List,
+    List {
+        /// Show binary version, trying --version, version, -v, -V
+        #[arg(short, long)]
+        version: bool,
+    },
 
     /// Update all installed binaries
     #[command(visible_aliases = ["u"], after_help = "Examples:\n  bini update\n  bini")]
@@ -216,7 +220,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     let _ = match args.command {
-        Some(Command::List) => return list_binaries(&installation_directory),
+        Some(Command::List { version }) => return list_binaries(&installation_directory, version),
         Some(Command::Install {
             name,
             as_name,
@@ -306,7 +310,7 @@ fn install(
         if let Ok(release_datetime) = OffsetDateTime::parse(&date, &Rfc3339) {
             if local_datetime >= release_datetime {
                 if force {
-                    info!(target: &log_target, "Binary is up to date. Replacing anyway.");
+                    warn!(target: &log_target, "Binary is up to date. Replacing anyway.");
                 } else {
                     info!(target: &log_target, "Binary is up to date. Nothing to do.");
                     return Ok(());
@@ -442,9 +446,43 @@ fn install(
     Ok(())
 }
 
-fn list_binaries(installation_directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn get_executable_version(executable_path: &Path) -> Option<String> {
+    let re = regex::Regex::new(r"v?(\d+\.\d+\.\d+)").ok()?;
+    let args_list = ["--version", "version", "-v", "-V"];
+
+    for arg in args_list {
+        let output = match std::process::Command::new(executable_path)
+            .arg(arg)
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+
+        let text = if !output.stdout.is_empty() {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        } else if !output.stderr.is_empty() {
+            String::from_utf8_lossy(&output.stderr).into_owned()
+        } else {
+            continue;
+        };
+
+        if let Some(caps) = re.captures(&text) {
+            if let Some(m) = caps.get(1) {
+                return Some(format!("v{}", m.as_str()));
+            }
+        }
+    }
+
+    None
+}
+
+fn list_binaries(
+    installation_directory: &Path,
+    version: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = format_description!("[year]-[month]-[day]");
-    let mut binaries: Vec<(String, String)> = Vec::new();
+    let mut binaries: Vec<(String, String, PathBuf)> = Vec::new();
 
     for entry in fs::read_dir(installation_directory)? {
         let entry = entry?;
@@ -455,13 +493,20 @@ fn list_binaries(installation_directory: &Path) -> Result<(), Box<dyn std::error
         let name = entry.file_name().to_string_lossy().into_owned();
         let modified = entry.metadata()?.modified()?;
         let date = OffsetDateTime::from(modified).format(format)?;
-        binaries.push((name, date));
+        binaries.push((name, date, entry.path()));
     }
 
     binaries.sort();
 
-    for (name, date) in binaries {
-        println!("{} ({})", name, date);
+    for (name, date, path) in binaries {
+        if version {
+            match get_executable_version(&path) {
+                Some(v) => println!("{} {} ({})", name, v, date),
+                None => println!("{} ({})", name, date),
+            }
+        } else {
+            println!("{} ({})", name, date);
+        }
     }
 
     Ok(())
