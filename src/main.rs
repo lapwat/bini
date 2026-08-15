@@ -184,6 +184,17 @@ fn format_asset_date(date: &str) -> String {
     }
 }
 
+fn display_tilde(path: &Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+
+    if let Some(home_path) = home {
+        if let Ok(rel) = path.strip_prefix(home_path) {
+            return format!("~/{}", rel.display());
+        }
+    }
+    path.display().to_string()
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // configure logs
     Builder::from_env(Env::default().default_filter_or("info"))
@@ -197,13 +208,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::create_dir_all(&installation_directory)?;
         warn!(
             "Created installation directory {}",
-            installation_directory.display()
+            display_tilde(&installation_directory),
         );
     }
     if !is_in_path(&installation_directory) {
         warn!(
             "Consider adding {} to your PATH",
-            installation_directory.display()
+            display_tilde(&installation_directory),
         )
     }
 
@@ -211,7 +222,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state_dir = dirs::state_dir().unwrap_or(data_dir).join("bini");
     if !state_dir.exists() {
         std::fs::create_dir_all(&state_dir)?;
-        warn!("Created state directory {}", state_dir.display());
+        warn!("Created state directory {}", display_tilde(&state_dir));
     }
     let index_path = state_dir.join("index.txt");
 
@@ -278,7 +289,7 @@ fn install(
 
     let url = format!("https://api.github.com/repos/{}/releases/latest", package);
     let client = reqwest::blocking::Client::new();
-    info!(target: &log_target, "Checking GitHub's latest release at {}", url);
+    info!(target: &log_target, "Checking GitHub's latest release of {}", package);
 
     let response = client
         .get(&url)
@@ -309,8 +320,8 @@ fn install(
         info!(
             target: &log_target,
             "Local binary found at {} ({})",
-            binary_path.display(),
-            format_date(local_datetime)
+            display_tilde(&binary_path),
+            format_date(local_datetime),
         );
 
         if local_datetime >= release_datetime {
@@ -431,15 +442,15 @@ fn install(
 
     filetime::set_file_mtime(&installation_path, mtime)?;
 
-    info!(target: &log_target, "Installed executable into {}", installation_path.display());
+    info!(target: &log_target, "Installed executable into {}", display_tilde(&installation_path));
 
     match record_installation(&index_path, binary_name, package) {
         Ok(()) => info!(target: &log_target, "Recorded {} in the install index", binary_name),
         Err(e) => warn!(
             target: &log_target,
             "Failed to record installation in {}: {}",
-            index_path.display(),
-            e
+            display_tilde(&index_path),
+            e,
         ),
     }
 
@@ -594,11 +605,11 @@ fn remove_binary(
     let binary_path = installation_directory.join(binary_name);
 
     match fs::remove_file(&binary_path) {
-        Ok(()) => info!("Removed {}", binary_path.display()),
+        Ok(()) => info!("Removed {}", display_tilde(&binary_path)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => warn!(
             "Binary {} not found in {}",
             binary_name,
-            installation_directory.display()
+            display_tilde(&installation_directory),
         ),
         Err(e) => return Err(e.into()),
     }
@@ -606,7 +617,11 @@ fn remove_binary(
     match remove_from_index(&index_path, binary_name) {
         Ok(true) => info!("Removed {} from the install index", binary_name),
         Ok(false) => {}
-        Err(e) => warn!("Failed to update index {}: {}", index_path.display(), e),
+        Err(e) => warn!(
+            "Failed to update index {}: {}",
+            display_tilde(&index_path),
+            e,
+        ),
     }
 
     Ok(())
