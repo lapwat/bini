@@ -68,7 +68,7 @@ enum Command {
     /// Update all installed binaries
     #[command(visible_aliases = ["u"], after_help = "Examples:\n  bini update\n  bini")]
     Update {
-        /// Force binary replacement
+        /// Force up-to-date binary override
         #[arg(short, long)]
         force: bool,
     },
@@ -195,7 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let installation_directory = data_dir.join("bini/bin");
     if !installation_directory.exists() {
         std::fs::create_dir_all(&installation_directory)?;
-        info!(
+        warn!(
             "Created installation directory {}",
             installation_directory.display()
         );
@@ -211,14 +211,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state_dir = dirs::state_dir().unwrap_or(data_dir).join("bini");
     if !state_dir.exists() {
         std::fs::create_dir_all(&state_dir)?;
-        info!("Created state directory {}", state_dir.display());
+        warn!("Created state directory {}", state_dir.display());
     }
     let index_path = state_dir.join("index.txt");
 
     let args = Args::parse();
 
     let _ = match args.command {
-        Some(Command::List { version }) => return list_binaries(&installation_directory, version),
+        Some(Command::List { version }) => {
+            return list_binaries(&installation_directory, &index_path, version);
+        }
         Some(Command::Install {
             name,
             as_name,
@@ -261,12 +263,16 @@ fn install(
     index_path: &Path,
     force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let binary_name = match as_name {
-        Some(alias) => alias,
-        _ => package.split('/').last().unwrap(),
+    let repo_name = package.split('/').last().unwrap();
+    let binary_name = as_name.unwrap_or(repo_name);
+
+    let log_target_buf;
+    let log_target = if binary_name == repo_name {
+        repo_name
+    } else {
+        log_target_buf = format!("{repo_name}({binary_name})");
+        &log_target_buf
     };
-    let binary_path = installation_directory.join(binary_name);
-    let log_target = format!("bini {package}");
 
     info!(target: &log_target, "Installing {} as {}", package, binary_name);
 
@@ -295,6 +301,7 @@ fn install(
         format_asset_date(&date)
     );
 
+    let binary_path = installation_directory.join(binary_name);
     if binary_path.exists() {
         let metadata = std::fs::metadata(&binary_path)?;
         let local_datetime = time::OffsetDateTime::from(metadata.modified()?);
@@ -322,7 +329,7 @@ fn install(
             );
         }
     } else {
-        info!(target: &log_target, "Local binary not found. Installing.")
+        warn!(target: &log_target, "Local binary not found. Installing.")
     }
 
     let mut compatible_name = None;
@@ -381,7 +388,7 @@ fn install(
     drop(out_file);
 
     if name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".gz") {
-        // info!(target: &log_target, "Extracting gzip archive...");
+        info!(target: &log_target, "Extracting gzip archive...");
         let tar_gz = std::fs::File::open(tmp_download_path)?;
         let tar = flate2::read::GzDecoder::new(tar_gz);
         let mut archive = tar::Archive::new(tar);
@@ -472,12 +479,32 @@ fn get_executable_version(executable_path: &Path) -> Option<String> {
     None
 }
 
+/// Looks up the source package recorded for `binary_name` in the install
+/// index. Returns `None` if the index is missing or the binary has no entry.
+fn get_installation_package(index_path: &Path, binary_name: &str) -> Option<String> {
+    let contents = fs::read_to_string(index_path).ok()?;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, package)) = line.split_once(',') else {
+            continue;
+        };
+        if name == binary_name {
+            return Some(package.to_string());
+        }
+    }
+    None
+}
+
 fn list_binaries(
     installation_directory: &Path,
+    index_path: &Path,
     version: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = format_description!("[year]-[month]-[day]");
-    let mut binaries: Vec<(String, String, PathBuf)> = Vec::new();
+    let mut binaries: Vec<(String, Option<String>, String, PathBuf)> = Vec::new();
 
     for entry in fs::read_dir(installation_directory)? {
         let entry = entry?;
@@ -488,20 +515,24 @@ fn list_binaries(
         let name = entry.file_name().to_string_lossy().into_owned();
         let modified = entry.metadata()?.modified()?;
         let date = time::OffsetDateTime::from(modified).format(format)?;
-        binaries.push((name, date, entry.path()));
+        let package = get_installation_package(index_path, &name);
+
+        binaries.push((name, package, date, entry.path()));
     }
 
     binaries.sort();
 
-    for (name, date, path) in binaries {
-        if version {
+    for (name, package, date, path) in binaries {
+        let pkg_str = package.as_deref().unwrap_or("unknown");
+        let line = if version {
             match get_executable_version(&path) {
-                Some(v) => println!("{} {} ({})", name, v, date),
-                None => println!("{} ({})", name, date),
+                Some(v) => format!("{} {} from {} ({})", name, v, pkg_str, date),
+                None => format!("{} from {} ({})", name, pkg_str, date),
             }
         } else {
-            println!("{} ({})", name, date);
-        }
+            format!("{} from {} ({})", name, pkg_str, date)
+        };
+        println!("{}", line);
     }
 
     Ok(())
