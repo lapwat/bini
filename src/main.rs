@@ -541,21 +541,13 @@ fn list_binaries(
 /// Appends `binary_name,package` to the index file, replacing any existing
 /// line for the same binary so the index keeps one entry per installed binary.
 fn record_installation(index_path: &Path, binary_name: &str, package: &str) -> std::io::Result<()> {
-    let mut lines: Vec<String> = Vec::new();
-
-    if index_path.exists() {
-        lines = fs::read_to_string(index_path)?
-            .lines()
-            .filter(|line| !line.is_empty() && !line.starts_with(&format!("{},", binary_name)))
-            .map(str::to_string)
-            .collect();
-    }
+    let mut lines: Vec<String> = fs::read_to_string(index_path)?
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with(&format!("{},", binary_name)))
+        .map(str::to_string)
+        .collect();
 
     lines.push(format!("{},{}", binary_name, package));
-
-    if let Some(parent) = index_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
 
     fs::write(index_path, lines.join("\n") + "\n")
 }
@@ -622,10 +614,6 @@ fn remove_binary(
 
 /// Removes the index line for `binary_name`. Returns true if a line was removed.
 fn remove_from_index(index_path: &Path, binary_name: &str) -> std::io::Result<bool> {
-    if !index_path.exists() {
-        return Ok(false);
-    }
-
     let contents = fs::read_to_string(index_path)?;
     let remaining: Vec<&str> = contents
         .lines()
