@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use dirs;
 use env_logger::{Builder, Env};
 use log::{error, info, warn};
-use serde_json::Value;
+use serde_json;
 use std::env;
 use std::env::consts::{ARCH, OS};
 use std::fs;
@@ -164,6 +164,53 @@ fn arch_matches(name: &str, arch: &str) -> bool {
     }
 }
 
+/// Selects the release asset that matches the current OS and architecture.
+/// Among the assets that pass all three tests, returns the one with the
+/// shortest name as `(name, browser_download_url)`, or `None` if none match.
+fn get_compatible_asset(assets: &[serde_json::Value]) -> Option<(String, String)> {
+    let mut best: Option<(String, String)> = None;
+    let mut best_len = usize::MAX;
+
+    for asset in assets {
+        let Some(name) = asset["name"].as_str() else {
+            continue;
+        };
+        let Some(url) = asset["browser_download_url"].as_str() else {
+            continue;
+        };
+
+        let name_lower = name.to_lowercase();
+
+        // Test 1: Must match the current OS
+        if !os_matches(&name_lower, OS) {
+            continue;
+        }
+
+        // Test 2: Must match the current architecture
+        if !arch_matches(&name_lower, ARCH) {
+            continue;
+        }
+
+        // Test 3: If contains '.', must end with .gz, .tar.gz, .tgz, or .zip
+        if name.contains('.')
+            && !name.ends_with(".gz")
+            && !name.ends_with(".tar.gz")
+            && !name.ends_with(".tgz")
+            && !name.ends_with(".zip")
+        {
+            continue;
+        }
+
+        // Among all that pass, keep the asset with the shortest name
+        if name.len() < best_len {
+            best_len = name.len();
+            best = Some((name.to_string(), url.to_string()));
+        }
+    }
+
+    best
+}
+
 /// Formats an `time::OffsetDateTime` as YYYY-MM-DD.
 fn format_date(datetime: time::OffsetDateTime) -> String {
     let date = datetime.date();
@@ -295,7 +342,7 @@ fn install(
         .get(&url)
         .header("User-Agent", "bini")
         .send()?
-        .json::<Value>()?;
+        .json::<serde_json::Value>()?;
 
     let Some(tag) = response["tag_name"].as_str() else {
         error!(target: &log_target, "No release found");
@@ -343,52 +390,17 @@ fn install(
         warn!(target: &log_target, "Local binary not found. Installing.")
     }
 
-    let mut compatible_name = None;
-    let mut compatible_url = None;
-
-    if let Some(assets) = response["assets"].as_array() {
-        for asset in assets {
-            let name = match asset["name"].as_str() {
-                Some(n) => n,
-                _ => continue,
-            };
-
-            let name_lower = name.to_lowercase();
-
-            // Test 1: Must match the current OS
-            if !os_matches(&name_lower, OS) {
-                continue;
-            }
-
-            // Test 2: Must match the current architecture
-            if !arch_matches(&name_lower, ARCH) {
-                continue;
-            }
-
-            // Test 3: If contains '.', must end with .gz, .tar.gz, .tgz, or .zip
-            if name.contains('.')
-                && !name.ends_with(".gz")
-                && !name.ends_with(".tar.gz")
-                && !name.ends_with(".tgz")
-                && !name.ends_with(".zip")
-            {
-                continue;
-            }
-
-            compatible_name = asset["name"].as_str().map(String::from);
-            compatible_url = asset["browser_download_url"].as_str().map(String::from);
-            break;
-        }
-    }
-
-    let (Some(name), Some(url)) = (compatible_name, compatible_url) else {
+    let Some((name, url)) = response["assets"]
+        .as_array()
+        .and_then(|a| get_compatible_asset(a))
+    else {
         error!(target: &log_target, "No {OS}/{ARCH} asset found in release");
         return Err(format!("No {OS}/{ARCH} asset found in release").into());
     };
 
     info!(target: &log_target, "Found {OS}/{ARCH} asset {}", name);
 
-    let tmp_dir = tempfile::Builder::new().prefix("bini").tempdir()?;
+    let tmp_dir = tempfile::Builder::new().prefix("bini-").tempdir()?;
     let tmp_download_path = tmp_dir.path().join(&name);
     info!(target: &log_target, "Created temporary folder {}", tmp_dir.path().display());
 
