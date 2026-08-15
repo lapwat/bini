@@ -277,20 +277,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _ = match args.command {
         Some(Command::List { version }) => {
-            return list_binaries(&installation_directory, &index_path, version);
+            let binaries = list_binaries(&installation_directory, &index_path)?;
+            print_binaries(&binaries, version);
+            return Ok(());
         }
         Some(Command::Install {
             name,
             as_name,
             force,
         }) => {
-            return install(
-                &name,
-                as_name.as_deref(),
-                &installation_directory,
-                &index_path,
-                force,
-            );
+            return install(name, as_name, &installation_directory, &index_path, force);
         }
         Some(Command::Update { force }) => {
             return update_binaries(&installation_directory, &index_path, force);
@@ -301,8 +297,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {
             if let Some(name) = args.name {
                 return install(
-                    &name,
-                    args.as_name.as_deref(),
+                    name,
+                    args.as_name,
                     &installation_directory,
                     &index_path,
                     args.force,
@@ -315,14 +311,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn install(
-    package: &str,
-    as_name: Option<&str>,
+    package: String,
+    as_name: Option<String>,
     installation_directory: &Path,
     index_path: &Path,
     force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let repo_name = package.split('/').last().unwrap();
-    let binary_name = as_name.unwrap_or(repo_name);
+    let binary_name = as_name.unwrap_or(repo_name.to_string());
 
     let log_target_buf;
     let log_target = if binary_name == repo_name {
@@ -359,7 +355,7 @@ fn install(
         format_asset_date(&date)
     );
 
-    let binary_path = installation_directory.join(binary_name);
+    let binary_path = installation_directory.join(&binary_name);
     if binary_path.exists() {
         let metadata = std::fs::metadata(&binary_path)?;
         let local_datetime = time::OffsetDateTime::from(metadata.modified()?);
@@ -434,10 +430,10 @@ fn install(
         executable.file_name().unwrap().to_string_lossy()
     );
 
-    let installation_path = installation_directory.join(binary_name);
-    let current_exe = env::current_exe()?.canonicalize()?;
+    let installation_path = installation_directory.join(&binary_name);
+    let current_exe = env::current_exe()?;
 
-    // handle self-update,
+    // handle self-update
     // TODO: as_name / binary_path cannot be bini (or only if package = lapwat/bini)
     // otherwise bini will be replaced by another binary
     if installation_path == current_exe {
@@ -456,7 +452,7 @@ fn install(
 
     info!(target: &log_target, "Installed executable into {}", display_tilde(&installation_path));
 
-    match record_installation(&index_path, binary_name, package) {
+    match record_installation(&index_path, &binary_name, &package) {
         Ok(()) => info!(target: &log_target, "Recorded {} in the install index", binary_name),
         Err(e) => warn!(
             target: &log_target,
@@ -521,13 +517,25 @@ fn get_installation_package(index_path: &Path, binary_name: &str) -> Option<Stri
     None
 }
 
+/// An installed binary tracked by bini, with its recorded source package,
+/// install date, and location on disk.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct InstalledBinary {
+    name: String,
+    package: String,
+    date: String,
+    path: PathBuf,
+}
+
+/// Collects the binaries installed in `installation_directory`, enriched with
+/// their recorded source package and install date. The result is sorted by
+/// binary name (then package, date, and path to break ties).
 fn list_binaries(
     installation_directory: &Path,
     index_path: &Path,
-    version: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Vec<InstalledBinary>, Box<dyn std::error::Error>> {
     let format = format_description!("[year]-[month]-[day]");
-    let mut binaries: Vec<(String, Option<String>, String, PathBuf)> = Vec::new();
+    let mut binaries: Vec<InstalledBinary> = Vec::new();
 
     for entry in fs::read_dir(installation_directory)? {
         let entry = entry?;
@@ -538,27 +546,40 @@ fn list_binaries(
         let name = entry.file_name().to_string_lossy().into_owned();
         let modified = entry.metadata()?.modified()?;
         let date = time::OffsetDateTime::from(modified).format(format)?;
-        let package = get_installation_package(index_path, &name);
 
-        binaries.push((name, package, date, entry.path()));
+        let Some(package) = get_installation_package(index_path, &name) else {
+            warn!("Binary {} not found in index", name);
+            continue;
+        };
+
+        binaries.push(InstalledBinary {
+            name,
+            package,
+            date,
+            path: entry.path(),
+        });
     }
 
     binaries.sort();
 
-    for (name, package, date, path) in binaries {
-        let pkg_str = package.as_deref().unwrap_or("unknown");
+    Ok(binaries)
+}
+
+/// Prints installed binaries. When `version` is set, each binary's detected
+/// version is included by querying the executable directly.
+fn print_binaries(binaries: &[InstalledBinary], version: bool) {
+    for binary in binaries {
+        let pkg_str = &binary.package;
         let line = if version {
-            match get_executable_version(&path) {
-                Some(v) => format!("{} {} from {} ({})", name, v, pkg_str, date),
-                None => format!("{} from {} ({})", name, pkg_str, date),
+            match get_executable_version(&binary.path) {
+                Some(v) => format!("{} {} from {} ({})", binary.name, v, pkg_str, binary.date),
+                None => format!("{} from {} ({})", binary.name, pkg_str, binary.date),
             }
         } else {
-            format!("{} from {} ({})", name, pkg_str, date)
+            format!("{} from {} ({})", binary.name, pkg_str, binary.date)
         };
         println!("{}", line);
     }
-
-    Ok(())
 }
 
 /// Appends `binary_name,package` to the index file, replacing any existing
@@ -582,26 +603,19 @@ fn update_binaries(
     index_path: &Path,
     force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let contents = fs::read_to_string(&index_path)?;
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        let Some((binary_name, package)) = line.split_once(',') else {
-            warn!("Skipping malformed index line: {line}");
-            continue;
-        };
-
+    let binaries = list_binaries(installation_directory, index_path)?;
+    for binary in binaries {
         if let Err(e) = install(
-            package,
-            Some(binary_name),
+            binary.package.clone(),
+            Some(binary.name.clone()),
             installation_directory,
             index_path,
             force,
         ) {
-            warn!("Failed to update {} ({}): {}", binary_name, package, e);
+            warn!(
+                "Failed to update {} ({}): {}",
+                binary.name, binary.package, e
+            );
         }
     }
 
