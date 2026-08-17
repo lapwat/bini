@@ -17,7 +17,7 @@ use walkdir::WalkDir;
 #[command(
     version,
     about,
-    after_help = "Examples:\n  bini install sharkdp/bat\n  bini install burntsushi/ripgrep --as rg\n  bini i sharkdp/bat\n  bini sharkdp/bat"
+    after_help = "Examples:\n  bini install bootandy/dust\n  bini i burntsushi/ripgrep --as rg\n  bini i ahmetb/kubectx -m kubens --as kns"
 )]
 struct Args {
     /// The name of the package to install
@@ -28,9 +28,13 @@ struct Args {
     #[arg(long = "as", requires = "name")]
     as_name: Option<String>,
 
-    /// Force binary replacement
+    /// Override up-to-date binary
     #[arg(short, long)]
     force: bool,
+
+    /// Only consider assets whose name contains this string
+    #[arg(short, long = "match", requires = "name")]
+    match_str: Option<String>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -41,7 +45,7 @@ enum Command {
     /// Install from GitHub repository
     #[command(
         visible_aliases = ["i"],
-        after_help = "Examples:\n  bini install sharkdp/bat\n  bini install burntsushi/ripgrep --as rg\n  bini i sharkdp/bat\n  bini sharkdp/bat"
+        after_help = "Examples:\n  bini install bootandy/dust\n  bini i burntsushi/ripgrep --as rg\n  bini i ahmetb/kubectx -m kubens --as kns"
     )]
     Install {
         /// The name of the package to install
@@ -52,9 +56,13 @@ enum Command {
         #[arg(long = "as", requires = "name")]
         as_name: Option<String>,
 
-        /// Force binary replacement
+        /// Override up-to-date binary
         #[arg(short, long, requires = "name")]
         force: bool,
+
+        /// Only consider assets whose name contains this string
+        #[arg(short, long, requires = "name")]
+        match_str: Option<String>,
     },
 
     /// List installed binaries
@@ -68,7 +76,7 @@ enum Command {
     /// Update all installed binaries
     #[command(visible_aliases = ["u"], after_help = "Examples:\n  bini update\n  bini")]
     Update {
-        /// Force up-to-date binary override
+        /// Override up-to-date binaries
         #[arg(short, long)]
         force: bool,
     },
@@ -167,7 +175,10 @@ fn arch_matches(name: &str, arch: &str) -> bool {
 /// Selects the release asset that matches the current OS and architecture.
 /// Among the assets that pass all three tests, returns the one with the
 /// shortest name as `(name, browser_download_url)`, or `None` if none match.
-fn get_compatible_asset(assets: &[serde_json::Value]) -> Option<(String, String)> {
+fn get_compatible_asset(
+    assets: &[serde_json::Value],
+    match_filter: Option<&str>,
+) -> Option<(String, String)> {
     let mut best: Option<(String, String)> = None;
     let mut best_len = usize::MAX;
 
@@ -199,6 +210,13 @@ fn get_compatible_asset(assets: &[serde_json::Value]) -> Option<(String, String)
             && !name.ends_with(".zip")
         {
             continue;
+        }
+
+        // Test 4: If --match is set, the asset name must contain the match string
+        if let Some(match_str) = match_filter {
+            if !name_lower.contains(&match_str.to_lowercase()) {
+                continue;
+            }
         }
 
         // Among all that pass, keep the asset with the shortest name
@@ -285,8 +303,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             name,
             as_name,
             force,
+            match_str,
         }) => {
-            return install(name, as_name, &installation_directory, &index_path, force);
+            return install(
+                name,
+                as_name,
+                &installation_directory,
+                &index_path,
+                force,
+                match_str.as_deref(),
+            );
         }
         Some(Command::Update { force }) => {
             return update_binaries(&installation_directory, &index_path, force);
@@ -302,6 +328,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &installation_directory,
                     &index_path,
                     args.force,
+                    args.match_str.as_deref(),
                 );
             } else {
                 return update_binaries(&installation_directory, &index_path, args.force);
@@ -316,15 +343,25 @@ fn install(
     installation_directory: &Path,
     index_path: &Path,
     force: bool,
+    match_str: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let repo_name = package.split('/').last().unwrap();
     let binary_name = as_name.unwrap_or(repo_name.to_string());
 
+    let repo_buf;
+    let repo_str = match &match_str {
+        Some(m) => {
+            repo_buf = format!("{repo_name}:{m}");
+            &repo_buf
+        }
+        _ => repo_name,
+    };
+
     let log_target_buf;
     let log_target = if binary_name == repo_name {
-        repo_name
+        repo_str
     } else {
-        log_target_buf = format!("{repo_name}({binary_name})");
+        log_target_buf = format!("{repo_str}({binary_name})");
         &log_target_buf
     };
 
@@ -388,10 +425,13 @@ fn install(
 
     let Some((name, url)) = response["assets"]
         .as_array()
-        .and_then(|a| get_compatible_asset(a))
+        .and_then(|a| get_compatible_asset(a, match_str))
     else {
-        error!(target: &log_target, "No {OS}/{ARCH} asset found in release");
-        return Err(format!("No {OS}/{ARCH} asset found in release").into());
+        let match_msg = match_str
+            .map(|m| format!(" matching \"{m}\""))
+            .unwrap_or_default();
+        error!(target: &log_target, "No {OS}/{ARCH} asset{match_msg} found in release");
+        return Err(format!("No {OS}/{ARCH} asset{match_msg} found in release").into());
     };
 
     info!(target: &log_target, "Found {OS}/{ARCH} asset {}", name);
@@ -452,7 +492,7 @@ fn install(
 
     info!(target: &log_target, "Installed executable into {}", display_tilde(&installation_path));
 
-    match record_installation(&index_path, &binary_name, &package) {
+    match record_installation(&index_path, &binary_name, &package, match_str) {
         Ok(()) => info!(target: &log_target, "Recorded {} in the install index", binary_name),
         Err(e) => warn!(
             target: &log_target,
@@ -500,31 +540,49 @@ fn get_executable_version(executable_path: &Path) -> Option<String> {
 
 /// Looks up the source package recorded for `binary_name` in the install
 /// index. Returns `None` if the index is missing or the binary has no entry.
-fn get_installation_package(index_path: &Path, binary_name: &str) -> Option<String> {
+fn get_installation_record(
+    index_path: &Path,
+    binary_name: &str,
+) -> Option<(String, Option<String>)> {
     let contents = fs::read_to_string(index_path).ok()?;
     for line in contents.lines() {
         let line = line.trim();
+
+        // check line
         if line.is_empty() {
             continue;
         }
-        let Some((name, package)) = line.split_once(',') else {
+
+        let mut parts = line.splitn(3, ',');
+
+        // check name
+        let Some(name) = parts.next() else {
             continue;
         };
-        if name == binary_name {
-            return Some(package.to_string());
+        if name != binary_name {
+            continue;
         }
+
+        let Some(package) = parts.next() else {
+            continue;
+        };
+
+        let match_str = parts.next().filter(|s| !s.is_empty()).map(str::to_string);
+
+        return Some((package.to_string(), match_str));
     }
     None
 }
 
 /// An installed binary tracked by bini, with its recorded source package,
-/// install date, and location on disk.
+/// install date, optional `--match` filter, and location on disk.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct InstalledBinary {
     name: String,
     package: String,
     date: String,
     path: PathBuf,
+    match_str: Option<String>,
 }
 
 /// Collects the binaries installed in `installation_directory`, enriched with
@@ -547,7 +605,7 @@ fn list_binaries(
         let modified = entry.metadata()?.modified()?;
         let date = time::OffsetDateTime::from(modified).format(format)?;
 
-        let Some(package) = get_installation_package(index_path, &name) else {
+        let Some((package, match_str)) = get_installation_record(index_path, &name) else {
             warn!("Binary {} not found in index", name);
             continue;
         };
@@ -557,6 +615,7 @@ fn list_binaries(
             package,
             date,
             path: entry.path(),
+            match_str,
         });
     }
 
@@ -569,7 +628,11 @@ fn list_binaries(
 /// version is included by querying the executable directly.
 fn print_binaries(binaries: &[InstalledBinary], version: bool) {
     for binary in binaries {
-        let pkg_str = &binary.package;
+        let pkg_str = match &binary.match_str {
+            Some(m) => format!("{}:{}", binary.package, m),
+            None => binary.package.to_string(),
+        };
+
         let line = if version {
             match get_executable_version(&binary.path) {
                 Some(v) => format!("{} {} from {} ({})", binary.name, v, pkg_str, binary.date),
@@ -582,22 +645,33 @@ fn print_binaries(binaries: &[InstalledBinary], version: bool) {
     }
 }
 
-/// Appends `binary_name,package` to the index file, replacing any existing
-/// line for the same binary so the index keeps one entry per installed binary.
-fn record_installation(index_path: &Path, binary_name: &str, package: &str) -> std::io::Result<()> {
+/// Appends `binary_name,package[,match]` to the index file, replacing any
+/// existing line for the same binary so the index keeps one entry per
+/// installed binary. The optional `match` field records a `--match` filter.
+fn record_installation(
+    index_path: &Path,
+    binary_name: &str,
+    package: &str,
+    match_filter: Option<&str>,
+) -> std::io::Result<()> {
     let mut lines: Vec<String> = fs::read_to_string(index_path)?
         .lines()
         .filter(|line| !line.is_empty() && !line.starts_with(&format!("{},", binary_name)))
         .map(str::to_string)
         .collect();
 
-    lines.push(format!("{},{}", binary_name, package));
+    let entry = match match_filter {
+        Some(m) => format!("{},{},{}", binary_name, package, m),
+        _ => format!("{},{}", binary_name, package),
+    };
+    lines.push(entry);
 
     fs::write(index_path, lines.join("\n") + "\n")
 }
 
 /// Updates every binary listed in the install index by re-installing it from
-/// its recorded source, keeping each binary's recorded name (`--as` included).
+/// its recorded source, keeping each binary's recorded name (`--as` included)
+/// and `--match` filter.
 fn update_binaries(
     installation_directory: &Path,
     index_path: &Path,
@@ -611,6 +685,7 @@ fn update_binaries(
             installation_directory,
             index_path,
             force,
+            binary.match_str.as_deref(),
         ) {
             warn!(
                 "Failed to update {} ({}): {}",
