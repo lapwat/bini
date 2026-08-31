@@ -17,7 +17,7 @@ use walkdir::WalkDir;
 #[command(
     version,
     about,
-    after_help = "Examples:\n  bini install bootandy/dust\n  bini i burntsushi/ripgrep --as rg\n  bini i ahmetb/kubectx -m kubens --as kns"
+    after_help = "Examples:\n  bini install bootandy/dust\n  bini i burntsushi/ripgrep --as rg\n  bini i ahmetb/kubectx --match kubens --as kns\n  bini i openfaas/faas-cli --match '^faas-cli$'"
 )]
 struct Args {
     /// The name of the package to install
@@ -32,8 +32,8 @@ struct Args {
     #[arg(short, long)]
     force: bool,
 
-    /// Only consider assets whose name contains this string
-    #[arg(short, long = "match", requires = "name")]
+    /// Only consider assets whose name matches this string or regex
+    #[arg(short, long = "match", requires = "name", value_parser = parse_match)]
     match_str: Option<String>,
 
     #[command(subcommand)]
@@ -45,7 +45,7 @@ enum Command {
     /// Install from GitHub repository
     #[command(
         visible_aliases = ["i"],
-        after_help = "Examples:\n  bini install bootandy/dust\n  bini i burntsushi/ripgrep --as rg\n  bini i ahmetb/kubectx -m kubens --as kns"
+        after_help = "Examples:\n  bini install bootandy/dust\n  bini i burntsushi/ripgrep --as rg\n  bini i ahmetb/kubectx --match kubens --as kns\n  bini i openfaas/faas-cli --match '^faas-cli$'"
     )]
     Install {
         /// The name of the package to install
@@ -60,8 +60,8 @@ enum Command {
         #[arg(short, long, requires = "name")]
         force: bool,
 
-        /// Only consider assets whose name contains this string
-        #[arg(short, long, requires = "name")]
+        /// Only consider assets whose name matches this string or regex
+        #[arg(short, long, requires = "name", value_parser = parse_match)]
         match_str: Option<String>,
     },
 
@@ -100,6 +100,14 @@ fn sanitize_name(s: &str) -> Result<String, String> {
     }
 
     Ok(result)
+}
+
+fn parse_match(s: &str) -> Result<String, String> {
+    if is_regex_like(s) {
+        regex::Regex::new(s).map_err(|e| format!("invalid regular expression: {e}"))?;
+    }
+
+    Ok(s.to_string())
 }
 
 fn is_in_path(dest_folder: &Path) -> bool {
@@ -172,13 +180,30 @@ fn arch_matches(name: &str, arch: &str) -> bool {
     }
 }
 
-/// Selects the release asset that matches the current OS and architecture.
-/// Among the assets that pass all three tests, returns the one with the
-/// shortest name as `(name, browser_download_url)`, or `None` if none match.
+/// Returns true if a --match value should be treated as a regular expression
+/// rather than a plain string, i.e. it contains at least one character
+/// outside letters, digits, '-', '_', '.', and spaces.
+fn is_regex_like(pattern: &str) -> bool {
+    pattern
+        .chars()
+        .any(|c| !c.is_alphanumeric() && !matches!(c, '-' | '_' | '.' | ' '))
+}
+
+/// Selects the release asset that matches the current OS, architecture and match_filter.
+/// If match_filter is a regular expression, os and arch tests ar skipped, and first match is returned
 fn get_compatible_asset(
     assets: &[serde_json::Value],
     match_filter: Option<&str>,
 ) -> Option<(String, String)> {
+    // A regex-like filter is compiled once, anchored so that it only
+    // matches a whole asset name. An invalid pattern (only reachable from
+    // a hand-edited index entry replayed by update) selects nothing, like
+    // a pattern with no match, and the caller reports an error.
+    let full_re = match match_filter.filter(|m| is_regex_like(m)) {
+        Some(m) => Some(regex::Regex::new(&format!("^(?:{m})$")).ok()?),
+        _ => None,
+    };
+
     let mut best: Option<(String, String)> = None;
     let mut best_len = usize::MAX;
 
@@ -191,6 +216,17 @@ fn get_compatible_asset(
         };
 
         let name_lower = name.to_lowercase();
+
+        // Test 0: a regex-like --match must fully match the asset name; the
+        // first match is returned directly, bypassing the tests below. A
+        // name that does not match is skipped entirely, so a filter with no
+        // match at all leaves `best` empty and the caller reports an error.
+        if let Some(re) = &full_re {
+            if re.is_match(name) {
+                return Some((name.to_string(), url.to_string()));
+            }
+            continue;
+        }
 
         // Test 1: Must match the current OS
         if !os_matches(&name_lower, OS) {
