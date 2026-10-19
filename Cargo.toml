@@ -18,4 +18,4 @@ tar = "=0.4.46"
 tempfile = "=3.27.0"
 time = { version="=0.3.55", features = ["macros", "formatting", "parsing"] }
 walkdir = "=2.5.0"
-zip = "=9.0.2"
+zip = "=9.0.5"
